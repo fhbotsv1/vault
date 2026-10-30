@@ -222,6 +222,9 @@ enum Screen {
 
 Screen currentScreen = FINGERPRINT_SCREEN;
 
+// Two-step confirmation prevents accidental shutdown from the lock screen.
+bool powerOffConfirm = false;
+
 // ----- AOA (Add Over Air) local web interface -----
 // Change this WPA2 passphrase before using outside a controlled prototype.
 static const char *AOA_SSID = "ES3C28P-AOA";
@@ -1055,20 +1058,23 @@ void drawFingerprintScreen() {
   }
 
   drawButton(
-    20, 231, 200, 44,
+    20, 224, 200, 36,
     "USE PIN INSTEAD",
     lcd.color565(0, 105, 125),
     WHITE
   );
 
-  lcd.setTextColor(MUTED, BG);
-  lcd.setTextSize(1);
-  lcd.drawString("Development build - demo data only", 120, 295);
+  if (powerOffConfirm) {
+    drawButton(12, 267, 102, 38, "CANCEL", PANEL, WHITE);
+    drawButton(126, 267, 102, 38, "YES, OFF", lcd.color565(120, 35, 40), WHITE);
+  } else {
+    drawButton(20, 267, 200, 38, "POWER OFF", lcd.color565(120, 35, 40), WHITE);
+  }
 
   // Show a recent fingerprint result, if any.
   if (statusMessage.length() > 0 &&
       (int32_t)(millis() - statusUntil) < 0) {
-    lcd.fillRect(10, 204, 220, 18, BG);
+    lcd.fillRect(10, 197, 220, 18, BG);
     lcd.setTextDatum(middle_center);
     lcd.setTextColor(
       fingerprintFailures > 0 ? RED : GREEN, BG
@@ -1822,6 +1828,45 @@ void drawAddAccountScreen() {
   lcd.drawString("Optional desktop entry: Serial Monitor", 120, 297);
 }
 
+void enterVaultDeepSleep() {
+  // Stop network services and clear active session state before sleeping.
+  stopAOA();
+  aoaServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+
+  enteredPIN = "";
+  statusMessage = "";
+  accountSite = "";
+  accountUser = "";
+  accountPassword = "";
+  editSite = "";
+  editUser = "";
+  editPassword = "";
+  serialLineBuffer = "";
+  for (uint8_t i = 0; i < MAX_ACCOUNTS; i++) {
+    vaultAccounts[i].site = "";
+    vaultAccounts[i].user = "";
+    vaultAccounts[i].password = "";
+  }
+  vaultAccountCount = 0;
+  accountLoaded = false;
+  secureClearGeneratedPassword();
+  memset(vaultKey, 0, sizeof(vaultKey));
+  powerOffConfirm = false;
+
+  // Close peripherals where supported. Deep sleep itself powers down the
+  // ESP32-S3 digital peripherals and radio; RESET is the intended restart.
+  FingerSerial.end();
+  SD_MMC.end();
+  digitalWrite(TFT_BL, LOW);
+  delay(100);
+
+  Serial.println("Vault entering deep sleep. Press RESET to restart.");
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
 void lockVault() {
   stopAOA();
   enteredPIN = "";
@@ -1845,6 +1890,7 @@ void lockVault() {
   fingerprintWaitingForRemoval = true;
 
   currentScreen = FINGERPRINT_SCREEN;
+  powerOffConfirm = false;
   lastActivity = millis();
 
   Serial.println("Vault locked.");
@@ -1856,13 +1902,38 @@ void lockVault() {
 // =================================================
 
 void handleFingerprintTouch(uint16_t x, uint16_t y) {
-  if (x >= 20 && x <= 220 &&
-      y >= 231 && y <= 275) {
+  // PIN fallback remains available above the power control.
+  if (x >= 20 && x <= 220 && y >= 224 && y <= 260) {
+    powerOffConfirm = false;
     enteredPIN = "";
     statusMessage = "";
     currentScreen = PIN_SCREEN;
     drawPINScreen();
     Serial.println("PIN fallback selected.");
+    return;
+  }
+
+  if (y >= 267 && y <= 305) {
+    if (!powerOffConfirm) {
+      powerOffConfirm = true;
+      statusMessage = "";
+      drawFingerprintScreen();
+      Serial.println("Power off requested; awaiting confirmation.");
+      return;
+    }
+
+    if (x >= 126 && x <= 228) {
+      Serial.println("Power off confirmed.");
+      enterVaultDeepSleep();
+      return;
+    }
+
+    if (x >= 12 && x <= 114) {
+      powerOffConfirm = false;
+      drawFingerprintScreen();
+      Serial.println("Power off cancelled.");
+      return;
+    }
   }
 }
 
