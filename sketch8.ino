@@ -131,6 +131,8 @@ struct VaultAccount {
 VaultAccount vaultAccounts[MAX_ACCOUNTS];
 uint8_t vaultAccountCount = 0;
 int selectedAccount = 0;
+const uint8_t ACCOUNTS_PER_PAGE = 7;
+uint8_t accountsPage = 0;
 String editSite = "";
 String editUser = "";
 String editPassword = "";
@@ -1714,16 +1716,27 @@ void drawAccountsScreen() {
     lcd.setTextSize(1);
     lcd.setTextColor(MUTED, BG);
     lcd.drawString("Select an account", 14, 53);
-    for (uint8_t i = 0; i < vaultAccountCount && i < MAX_ACCOUNTS; i++) {
-      int y = 60 + i * 26;
-      lcd.fillRoundRect(12, y, 216, 23, 5, PANEL);
-      lcd.drawRoundRect(12, y, 216, 23, 5, BORDER);
+    const uint8_t pageCount = (vaultAccountCount + ACCOUNTS_PER_PAGE - 1) / ACCOUNTS_PER_PAGE;
+    if (accountsPage >= pageCount && pageCount > 0) accountsPage = pageCount - 1;
+    const uint16_t first = accountsPage * ACCOUNTS_PER_PAGE;
+    const uint16_t last = min((uint16_t)vaultAccountCount, (uint16_t)(first + ACCOUNTS_PER_PAGE));
+    for (uint16_t i = first; i < last; i++) {
+      int y = 60 + (i - first) * 27;
+      lcd.fillRoundRect(12, y, 216, 24, 5, PANEL);
+      lcd.drawRoundRect(12, y, 216, 24, 5, BORDER);
       lcd.setTextColor(WHITE, PANEL);
       lcd.setTextDatum(middle_left);
       String label = String(i + 1) + ". " + vaultAccounts[i].site;
       if (label.length() > 25) label = label.substring(0, 24) + "…";
       lcd.drawString(label, 20, y + 12);
     }
+    // Page controls keep every saved account reachable on the 240x320 display.
+    drawButton(12, 252, 70, 22, "PREV", PANEL);
+    lcd.setTextDatum(middle_center);
+    lcd.setTextColor(MUTED, BG);
+    lcd.setTextSize(1);
+    lcd.drawString(String(accountsPage + 1) + "/" + String(max((uint8_t)1, pageCount)), 120, 263);
+    drawButton(158, 252, 70, 22, "NEXT", PANEL);
   }
   drawButton(12, 278, 102, 32, "BACK", PANEL);
   drawButton(126, 278, 102, 32, "ADD NEW", lcd.color565(0, 105, 125));
@@ -2064,9 +2077,25 @@ void handleAccountsTouch(uint16_t x, uint16_t y) {
     else { editSite = ""; editUser = ""; editPassword = ""; editField = 0; editingExistingAccount = false; keyboardShift = false; keyboardSymbols = false; currentScreen = ADD_ACCOUNT_SCREEN; drawAddAccountScreen(); }
     lastActivity = millis(); return;
   }
-  if (x >= 12 && x <= 228 && y >= 60 && y < 268) {
-    int idx = (y - 60) / 26;
-    if (idx >= 0 && idx < vaultAccountCount && idx < MAX_ACCOUNTS) {
+
+  if (y >= 252 && y <= 274) {
+    const uint8_t pageCount = (vaultAccountCount + ACCOUNTS_PER_PAGE - 1) / ACCOUNTS_PER_PAGE;
+    if (x < 90 && accountsPage > 0) {
+      accountsPage--;
+      drawAccountsScreen();
+    } else if (x >= 150 && accountsPage + 1 < pageCount) {
+      accountsPage++;
+      drawAccountsScreen();
+    }
+    lastActivity = millis();
+    return;
+  }
+
+  if (x >= 12 && x <= 228 && y >= 60 && y < 249) {
+    int row = (y - 60) / 27;
+    int idx = accountsPage * ACCOUNTS_PER_PAGE + row;
+    if (row >= 0 && row < ACCOUNTS_PER_PAGE &&
+        idx >= 0 && idx < vaultAccountCount && idx < MAX_ACCOUNTS) {
       selectedAccount = idx;
       passwordVisible = false;
       currentScreen = ACCOUNT_DETAIL_SCREEN;
