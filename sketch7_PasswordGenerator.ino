@@ -6,6 +6,7 @@
 #include <SD_MMC.h>
 #include <Preferences.h>
 #include <esp_system.h>
+#include <esp_sleep.h>
 #include <mbedtls/gcm.h>
 #include <WiFi.h>
 #include <WebServer.h>
