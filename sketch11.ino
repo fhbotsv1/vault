@@ -304,7 +304,7 @@ void drawPasswordModeScreen();
 void handlePasswordModeTouch(uint16_t x, uint16_t y);
 void drawPasswordConfigScreen();
 void handlePasswordConfigTouch(uint16_t x, uint16_t y);
-void generateCustomPassword();
+static void generateCustomPassword();
 void handleAddAccountTouch(uint16_t x, uint16_t y);
 bool initVaultStorage();
 bool saveDemoAccount();
