@@ -1779,7 +1779,14 @@ void drawAccountDetailScreen() {
     drawButton(190, 129, 38, 29, "P", lcd.color565(0, 105, 70));
     drawButton(12, 165, 134, 31, passwordVisible ? "HIDE PASS" : "SHOW PASS", PANEL);
     drawButton(154, 165, 70, 31, "EDIT", PANEL);
-    drawButton(12, 207, 216, 31, "DELETE ACCOUNT", lcd.color565(120, 35, 40), WHITE);
+    drawButton(12, 207, 104, 31, "DELETE", lcd.color565(120, 35, 40), WHITE);
+    drawButton(124, 207, 104, 31, "BT", bleKeyboardStarted ? lcd.color565(0, 105, 70) : PANEL, WHITE);
+    if (statusMessage.length() > 0 && (int32_t)(millis() - statusUntil) < 0) {
+      lcd.setTextDatum(middle_center);
+      lcd.setTextColor(GREEN, BG);
+      lcd.setTextSize(1);
+      lcd.drawString(statusMessage, 120, 253);
+    }
     lcd.setTextDatum(middle_center); lcd.setTextColor(MUTED, BG); lcd.setTextSize(1);
     //lcd.drawString("Focus a field on your phone, then tap P", 120, 250);
   }
@@ -2139,7 +2146,27 @@ void handleAccountDetailTouch(uint16_t x, uint16_t y) {
     lastActivity = millis(); drawAccountDetailScreen(); return;
   }
   if (y >= 207 && y <= 240) {
-    currentScreen = DELETE_CONFIRM_SCREEN; lastActivity = millis(); drawDeleteConfirmScreen(); return;
+    if (x < 120) {
+      currentScreen = DELETE_CONFIRM_SCREEN;
+      lastActivity = millis();
+      drawDeleteConfirmScreen();
+      return;
+    }
+
+    // BLE HID starts only after an explicit tap on the BT button.
+    if (!bleKeyboardStarted) {
+      bleKeyboard.begin();
+      bleKeyboardStarted = true;
+      Serial.println("BLE HID keyboard started on request; advertising for phone pairing.");
+      setStatus("Bluetooth ready - pair your phone", 3500);
+    } else if (bleKeyboard.isConnected()) {
+      setStatus("Bluetooth already connected", 2500);
+    } else {
+      setStatus("Bluetooth active - ready to pair", 3000);
+    }
+    lastActivity = millis();
+    drawAccountDetailScreen();
+    return;
   }
 }
 
@@ -2313,9 +2340,8 @@ void setup() {
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
   updateBatteryReading();
 
-  bleKeyboard.begin();
-  bleKeyboardStarted = true;
-  Serial.println("BLE HID keyboard initialised. Pair with ES3C28P Vault from your phone Bluetooth settings.");
+  // BLE HID is intentionally left off at boot.
+  // It is started only when the user taps BT on the account details screen.
 
   pinMode(TOUCH_PIN, INPUT);
 
@@ -2478,6 +2504,8 @@ void loop() {
       drawFingerprintScreen();
     } else if (currentScreen == PIN_SCREEN) {
       drawPINScreen();
+    } else if (currentScreen == ACCOUNT_DETAIL_SCREEN) {
+      drawAccountDetailScreen();
     }
   }
 
