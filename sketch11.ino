@@ -138,6 +138,9 @@ bool keyboardShift = false;
 bool keyboardSymbols = false;
 bool editingExistingAccount = false;
 bool passwordVisible = false;
+// Briefly reveal only the newest character while typing in the password field.
+uint32_t passwordPreviewUntil = 0;
+const uint32_t PASSWORD_PREVIEW_MS = 900;
 String serialLineBuffer = "";
 
 uint8_t vaultKey[VAULT_KEY_SIZE];
@@ -1865,7 +1868,17 @@ void drawAddAccountScreen() {
     lcd.drawString(names[i], 12, y + 11);
     lcd.setTextColor(WHITE, fill);
     String value = fields[i];
-    if (i == 2 && value.length()) { String masked = ""; for (size_t j = 0; j < value.length(); j++) masked += '*'; value = masked; }
+    if (i == 2 && value.length()) {
+      // Mask every character except the newest one for a short confirmation window.
+      String masked = "";
+      bool revealLast = (editField == 2 && passwordPreviewUntil != 0 &&
+                         (int32_t)(passwordPreviewUntil - millis()) > 0);
+      for (size_t j = 0; j < value.length(); j++) {
+        if (revealLast && j == value.length() - 1) masked += value[j];
+        else masked += '*';
+      }
+      value = masked;
+    }
     if (value.length() > 23) value = value.substring(value.length() - 23);
     lcd.drawString(value, 53, y + 11);
   }
@@ -2227,6 +2240,7 @@ void handleAddAccountTouch(uint16_t x, uint16_t y) {
   if (y >= 48 && y < 123 && x >= 6 && x <= 234) {
     editField = (y - 48) / 25;
     if (editField > 2) editField = 2;
+    passwordPreviewUntil = 0;
     drawAddAccountScreen(); return;
   }
   // On-screen keyboard: 3 rows of characters.
@@ -2247,7 +2261,10 @@ void handleAddAccountTouch(uint16_t x, uint16_t y) {
       if (!keyboardSymbols && keyboardShift && ch >= 'a' && ch <= 'z') ch -= 32;
       String *target = editField == 0 ? &editSite : (editField == 1 ? &editUser : &editPassword);
       int maxLen = editField == 0 ? 40 : (editField == 1 ? 40 : 64);
-      if (target->length() < maxLen) *target += ch;
+      if (target->length() < maxLen) {
+        *target += ch;
+        if (editField == 2) passwordPreviewUntil = millis() + PASSWORD_PREVIEW_MS;
+      }
       lastActivity = millis(); drawAddAccountScreen(); return;
     }
   }
@@ -2257,6 +2274,7 @@ void handleAddAccountTouch(uint16_t x, uint16_t y) {
     else if (x < 138) {
       String *target = editField == 0 ? &editSite : (editField == 1 ? &editUser : &editPassword);
       if (target->length()) target->remove(target->length() - 1);
+      if (editField == 2) passwordPreviewUntil = 0;
     } else {
       String *target = editField == 0 ? &editSite : (editField == 1 ? &editUser : &editPassword);
       int maxLen = editField == 0 ? 40 : (editField == 1 ? 40 : 64);
@@ -2265,7 +2283,7 @@ void handleAddAccountTouch(uint16_t x, uint16_t y) {
     lastActivity = millis(); drawAddAccountScreen(); return;
   }
   if (y >= 251 && y <= 284) {
-    if (x < 80) { editField = (editField + 1) % 3; drawAddAccountScreen(); return; }
+    if (x < 80) { editField = (editField + 1) % 3; passwordPreviewUntil = 0; drawAddAccountScreen(); return; }
     if (x < 160) {
       if (!editSite.length() || !editUser.length() || !editPassword.length()) {
         setStatus("Fill site, username, password", 2200); drawAddAccountScreen(); return;
@@ -2474,6 +2492,14 @@ void loop() {
 
   processSerialEntry();
   serviceAOA();
+
+  // Redraw the password field once the brief character-preview window expires.
+  if (currentScreen == ADD_ACCOUNT_SCREEN &&
+      passwordPreviewUntil != 0 &&
+      (int32_t)(millis() - passwordPreviewUntil) >= 0) {
+    passwordPreviewUntil = 0;
+    drawAddAccountScreen();
+  }
 
   // Read touchscreen.
   uint16_t x, y;
