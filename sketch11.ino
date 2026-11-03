@@ -1714,8 +1714,10 @@ void drawGenerateScreen() {
   drawButton(12, 226, 102, 36, "REGEN.", PANEL);
   drawButton(126, 226, 102, 36, "CANCEL", lcd.color565(120, 35, 40));
   drawButton(65, 270, 110, 32, bleKeyboardStarted ? "BT ON" : "BT ON", bleKeyboardStarted ? lcd.color565(0, 105, 70) : PANEL, WHITE);
-  lcd.setTextColor(MUTED, BG); lcd.setTextSize(1);
-  lcd.drawString("PASS BT types only; SAVE stores password", 120, 311);
+  lcd.setTextColor(statusMessage.length() && (int32_t)(millis() - statusUntil) < 0 ? GREEN : MUTED, BG);
+  lcd.setTextSize(1);
+  lcd.drawString(statusMessage.length() && (int32_t)(millis() - statusUntil) < 0
+                   ? statusMessage : "PASS BT types only; SAVE stores password", 120, 311);
 }
 void handleGenerateTouch(uint16_t x, uint16_t y) {
   if (y >= 177 && y <= 215) {
@@ -2604,6 +2606,8 @@ void loop() {
       drawPINScreen();
     } else if (currentScreen == ACCOUNT_DETAIL_SCREEN) {
       drawAccountDetailScreen();
+    } else if (currentScreen == GENERATE_SCREEN) {
+      drawGenerateScreen();
     }
   }
 
