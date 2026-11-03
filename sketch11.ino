@@ -131,8 +131,11 @@ uint8_t accountsPage = 0;
 String editSite = "";
 String editUser = "";
 String editPassword = "";
-char generatedPassword[13] = {0};
+char generatedPassword[33] = {0};
 bool generatedPasswordReady = false;
+bool generatedPasswordCustom = false;
+uint8_t customPasswordLength = 12;
+bool customUseUpper = true, customUseLower = true, customUseNumbers = true, customUseSymbols = true;
 uint8_t editField = 0; // 0=site, 1=username, 2=password
 bool keyboardShift = false;
 bool keyboardSymbols = false;
@@ -218,6 +221,8 @@ enum Screen {
   ADD_ACCOUNT_SCREEN,
   DELETE_CONFIRM_SCREEN,
   AOA_QR_SCREEN,
+  PASSWORD_MODE_SCREEN,
+  PASSWORD_CONFIG_SCREEN,
   GENERATE_SCREEN
 };
 
@@ -295,6 +300,11 @@ void pasteCredentialOverBLE(const String &credential, const char *label);
 void drawAddAccountScreen();
 void drawGenerateScreen();
 void handleGenerateTouch(uint16_t x, uint16_t y);
+void drawPasswordModeScreen();
+void handlePasswordModeTouch(uint16_t x, uint16_t y);
+void drawPasswordConfigScreen();
+void handlePasswordConfigTouch(uint16_t x, uint16_t y);
+void generateCustomPassword();
 void handleAddAccountTouch(uint16_t x, uint16_t y);
 bool initVaultStorage();
 bool saveDemoAccount();
@@ -1677,7 +1687,19 @@ static void generateSecurePassword() {
     generatedPassword[j] = temp;
   }
 
-  generatedPasswordReady = true;
+  generatedPasswordReady = true; generatedPasswordCustom = false;
+}
+static void generateCustomPassword() {
+  static const char *sets[4] = {"ABCDEFGHJKLMNPQRSTUVWXYZ","abcdefghijkmnopqrstuvwxyz","23456789","!@#$%&*_-"};
+  bool use[4] = {customUseUpper,customUseLower,customUseNumbers,customUseSymbols};
+  size_t lens[4] = {24,25,8,9}; char alphabet[80]; size_t alen=0,count=0;
+  secureClearGeneratedPassword();
+  for(int s=0;s<4;++s) if(use[s]) { for(size_t j=0;j<lens[s];++j) alphabet[alen++]=sets[s][j]; generatedPassword[count++]=sets[s][secureRandomBelow(lens[s])]; }
+  if(!count||customPasswordLength<count||customPasswordLength>32){setStatus("Select character types",1800);drawPasswordConfigScreen();return;}
+  for(size_t i=count;i<customPasswordLength;++i)generatedPassword[i]=alphabet[secureRandomBelow(alen)];
+  generatedPassword[customPasswordLength]='\0';
+  for(size_t i=customPasswordLength-1;i>0;--i){size_t j=secureRandomBelow(i+1);char t=generatedPassword[i];generatedPassword[i]=generatedPassword[j];generatedPassword[j]=t;}
+  memset(alphabet,0,sizeof(alphabet));generatedPasswordReady=true;generatedPasswordCustom=true;
 }
 static void openGeneratedPasswordSaveForm() {
   if (!generatedPasswordReady) { setStatus("Generate a password first", 1800); drawGenerateScreen(); return; }
@@ -1686,10 +1708,14 @@ static void openGeneratedPasswordSaveForm() {
   keyboardShift = false; keyboardSymbols = false;
   currentScreen = ADD_ACCOUNT_SCREEN; lastActivity = millis(); drawAddAccountScreen();
 }
+void drawPasswordModeScreen(){drawHeader("PASSWORD OPTIONS");lcd.setTextDatum(middle_center);lcd.setTextColor(MUTED,BG);lcd.setTextSize(1);lcd.drawString("Choose how to create your password",120,72);drawButton(20,105,200,52,"DEFAULT - 12 CHAR",lcd.color565(0,105,70));drawButton(20,174,200,52,"CUSTOM",lcd.color565(0,105,125));drawButton(20,254,200,38,"BACK",PANEL);}
+void handlePasswordModeTouch(uint16_t x,uint16_t y){if(x<20||x>220)return;if(y>=105&&y<=157){generateSecurePassword();currentScreen=GENERATE_SCREEN;lastActivity=millis();drawGenerateScreen();return;}if(y>=174&&y<=226){currentScreen=PASSWORD_CONFIG_SCREEN;lastActivity=millis();drawPasswordConfigScreen();return;}if(y>=254&&y<=292){currentScreen=HOME_SCREEN;lastActivity=millis();drawHomeScreen();return;}}
+void drawPasswordConfigScreen(){drawHeader("CUSTOM PASSWORD");lcd.setTextDatum(middle_center);lcd.setTextColor(WHITE,BG);lcd.setTextSize(1);lcd.drawString("LENGTH",120,62);drawButton(24,75,54,34,"-",PANEL);lcd.setTextColor(CYAN,BG);lcd.setTextSize(2);lcd.drawString(String(customPasswordLength),120,92);drawButton(162,75,54,34,"+",PANEL);const char*labels[4]={"Uppercase A-Z","Lowercase a-z","Numbers 0-9","Symbols !@#$"};bool on[4]={customUseUpper,customUseLower,customUseNumbers,customUseSymbols};for(int i=0;i<4;++i){int y=119+i*34;lcd.fillRoundRect(14,y,212,29,5,PANEL);lcd.setTextDatum(middle_left);lcd.setTextColor(WHITE,PANEL);lcd.setTextSize(1);lcd.drawString(labels[i],22,y+15);drawButton(166,y+2,52,25,on[i]?"ON":"OFF",on[i]?lcd.color565(0,105,70):lcd.color565(100,40,40));}drawButton(12,264,132,38,"GENERATE",lcd.color565(0,105,70));drawButton(154,264,74,38,"BACK",PANEL);}
+void handlePasswordConfigTouch(uint16_t x,uint16_t y){if(y>=75&&y<=109){if(x>=24&&x<=78&&customPasswordLength>4)customPasswordLength--;else if(x>=162&&x<=216&&customPasswordLength<32)customPasswordLength++;lastActivity=millis();drawPasswordConfigScreen();return;}if(y>=119&&y<=248&&x>=166&&x<=218){int row=(y-119)/34;bool*f[4]={&customUseUpper,&customUseLower,&customUseNumbers,&customUseSymbols};int active=(int)customUseUpper+(int)customUseLower+(int)customUseNumbers+(int)customUseSymbols;if(*f[row]&&active==1){setStatus("Keep at least one type ON",1800);drawPasswordConfigScreen();return;}*f[row]=!*f[row];lastActivity=millis();drawPasswordConfigScreen();return;}if(y>=264&&y<=302){if(x>=12&&x<=144){generateCustomPassword();if(generatedPasswordReady){currentScreen=GENERATE_SCREEN;lastActivity=millis();drawGenerateScreen();}return;}if(x>=154&&x<=228){currentScreen=PASSWORD_MODE_SCREEN;lastActivity=millis();drawPasswordModeScreen();return;}}}
 void drawGenerateScreen() {
   drawHeader("GENERATE PASSWORD");
   lcd.setTextDatum(middle_center); lcd.setTextColor(MUTED, BG); lcd.setTextSize(1);
-  lcd.drawString("Secure random password (12 characters)", 120, 65);
+  lcd.drawString("Secure random password (" + String(strlen(generatedPassword)) + " characters)", 120, 65);
   lcd.fillRoundRect(10, 88, 220, 44, 6, PANEL); lcd.drawRoundRect(10, 88, 220, 44, 6, BORDER);
   lcd.setTextColor(WHITE, PANEL); lcd.setTextSize(2);
   lcd.drawString(generatedPasswordReady ? String(generatedPassword) : String("----------"), 120, 110);
@@ -1713,7 +1739,7 @@ void handleGenerateTouch(uint16_t x, uint16_t y) {
     if (x >= 126 && x <= 228) { openGeneratedPasswordSaveForm(); return; }
   }
   if (y >= 226 && y <= 264) {
-    if (x >= 12 && x <= 114) { generateSecurePassword(); lastActivity = millis(); drawGenerateScreen(); return; }
+    if (x >= 12 && x <= 114) { if(generatedPasswordCustom)generateCustomPassword();else generateSecurePassword();lastActivity=millis();drawGenerateScreen();return;}
     if (x >= 126 && x <= 228) { secureClearGeneratedPassword(); currentScreen = HOME_SCREEN; lastActivity = millis(); drawHomeScreen(); return; }
   }
 }
@@ -2101,8 +2127,8 @@ void handleHomeTouch(uint16_t x, uint16_t y) {
     if (!loadVaultAccounts() && vaultFileInvalid) { setStatus("Invalid vault file - preserved", 2500); drawHomeScreen(); return; }
     if (!SD_MMC.exists(VAULT_FILE)) vaultAccountCount = 0;
     if (vaultAccountCount >= MAX_ACCOUNTS) { setStatus("Account limit reached", 2200); drawHomeScreen(); return; }
-    generateSecurePassword();
-    currentScreen = GENERATE_SCREEN; lastActivity = millis(); drawGenerateScreen();
+    secureClearGeneratedPassword();
+    currentScreen = PASSWORD_MODE_SCREEN; lastActivity = millis(); drawPasswordModeScreen();
     return;
   }
 }
@@ -2524,6 +2550,10 @@ void loop() {
       handleDeleteConfirmTouch(x, y);
     } else if (currentScreen == AOA_QR_SCREEN) {
       handleAOAQRScreenTouch(x, y);
+    } else if (currentScreen == PASSWORD_MODE_SCREEN) {
+      handlePasswordModeTouch(x, y);
+    } else if (currentScreen == PASSWORD_CONFIG_SCREEN) {
+      handlePasswordConfigTouch(x, y);
     } else if (currentScreen == GENERATE_SCREEN) {
       handleGenerateTouch(x, y);
     } else {
@@ -2557,6 +2587,8 @@ void loop() {
        currentScreen == ADD_ACCOUNT_SCREEN ||
        currentScreen == DELETE_CONFIRM_SCREEN ||
        currentScreen == AOA_QR_SCREEN ||
+       currentScreen == PASSWORD_MODE_SCREEN ||
+       currentScreen == PASSWORD_CONFIG_SCREEN ||
        currentScreen == GENERATE_SCREEN) &&
       millis() - lastActivity >= AUTO_LOCK_MS) {
     lockVault();
