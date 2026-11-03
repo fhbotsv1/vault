@@ -1616,26 +1616,14 @@ void drawHomeScreen() {
   drawButton(20, 96, 200, 34, "My Accounts", PANEL);
   drawButton(20, 136, 200, 34, "Add Account", PANEL);
   drawButton(20, 176, 200, 34, "Generate", PANEL);
-  lcd.fillRoundRect(12, 236, 102, 42, 7, lcd.color565(120, 35, 40));
-  lcd.drawRoundRect(12, 236, 102, 42, 7, BORDER);
-  lcd.setTextDatum(middle_center);
-  lcd.setTextColor(WHITE, lcd.color565(120, 35, 40));
-  lcd.setTextSize(1);
-  lcd.drawString("LOCK VAULT", 63, 257);
-  lcd.fillRoundRect(126, 236, 102, 42, 7, aoaActive ? lcd.color565(110, 70, 20) : lcd.color565(0, 105, 125));
-  lcd.drawRoundRect(126, 236, 102, 42, 7, BORDER);
-  lcd.setTextDatum(middle_center);
-  lcd.setTextColor(WHITE, aoaActive ? lcd.color565(110, 70, 20) : lcd.color565(0, 105, 125));
-  lcd.setTextSize(1);
-  lcd.drawString(aoaActive ? "AOA QR" : "ADD OVER AIR", 177, 257);
+  drawButton(8, 236, 70, 42, "LOCK", lcd.color565(120, 35, 40), WHITE);
+  drawButton(85, 236, 70, 42, aoaActive ? "AOA QR" : "AOA", aoaActive ? lcd.color565(110, 70, 20) : lcd.color565(0, 105, 125), WHITE);
+  drawButton(162, 236, 70, 42, "BT OFF", bleKeyboardStarted ? lcd.color565(0, 105, 70) : PANEL, WHITE);
   lcd.setTextColor(MUTED, BG);
   lcd.setTextSize(1);
-  if (aoaActive) {
-    lcd.drawString("AOA hotspot active", 120, 289);
-    lcd.drawString("Tap AOA SHOW QR to reconnect", 120, 305);
-  } else {
-    lcd.drawString(vaultStorageReady ? "Encrypted storage ready" : "Storage unavailable", 120, 296);
-  }
+  if (aoaActive) lcd.drawString("AOA hotspot active", 120, 294);
+  else lcd.drawString(vaultStorageReady ? "Encrypted storage ready" : "Storage unavailable", 120, 294);
+  if (bleKeyboardStarted) lcd.drawString(bleKeyboard.isConnected() ? "Bluetooth connected" : "Bluetooth on - pair your phone", 120, 309);
 }
 
 
@@ -1725,22 +1713,50 @@ void drawGenerateScreen() {
   drawButton(126, 177, 102, 38, "SAVE", lcd.color565(0, 105, 70));
   drawButton(12, 226, 102, 36, "REGEN.", PANEL);
   drawButton(126, 226, 102, 36, "CANCEL", lcd.color565(120, 35, 40));
+  drawButton(65, 270, 110, 32, bleKeyboardStarted ? "BT ON" : "BT ON", bleKeyboardStarted ? lcd.color565(0, 105, 70) : PANEL, WHITE);
   lcd.setTextColor(MUTED, BG); lcd.setTextSize(1);
-  lcd.drawString("PASS to type it, SAVE to record it", 120, 286);
+  lcd.drawString("PASS BT types only; SAVE stores password", 120, 311);
 }
 void handleGenerateTouch(uint16_t x, uint16_t y) {
   if (y >= 177 && y <= 215) {
     if (x >= 12 && x <= 114) {
       if (!generatedPasswordReady) { setStatus("No password generated", 1800); drawGenerateScreen(); return; }
-      if (!bleKeyboardStarted || !bleKeyboard.isConnected()) { setStatus("Pair BLE keyboard first", 2200); drawGenerateScreen(); return; }
+      if (!bleKeyboardStarted) {
+        setStatus("Bluetooth is off - tap BT below to turn on", 2600);
+        drawGenerateScreen();
+        return;
+      }
+      if (!bleKeyboard.isConnected()) {
+        setStatus("Not paired - pair Vault in phone Bluetooth", 2800);
+        drawGenerateScreen();
+        return;
+      }
       bleKeyboard.print(String(generatedPassword));
-      lastActivity = millis(); openGeneratedPasswordSaveForm(); return;
+      lastActivity = millis();
+      setStatus("Password sent over Bluetooth", 1800);
+      drawGenerateScreen();
+      return;
     }
     if (x >= 126 && x <= 228) { openGeneratedPasswordSaveForm(); return; }
   }
   if (y >= 226 && y <= 264) {
     if (x >= 12 && x <= 114) { if(generatedPasswordCustom)generateCustomPassword();else generateSecurePassword();lastActivity=millis();drawGenerateScreen();return;}
     if (x >= 126 && x <= 228) { secureClearGeneratedPassword(); currentScreen = HOME_SCREEN; lastActivity = millis(); drawHomeScreen(); return; }
+  }
+  if (y >= 270 && y <= 304 && x >= 65 && x <= 175) {
+    if (!bleKeyboardStarted) {
+      bleKeyboard.begin();
+      bleKeyboardStarted = true;
+      Serial.println("BLE HID keyboard started from Generate Password screen.");
+      setStatus("Bluetooth on - pair your phone", 2800);
+    } else if (bleKeyboard.isConnected()) {
+      setStatus("Bluetooth connected", 1800);
+    } else {
+      setStatus("Bluetooth on - pair your phone", 2400);
+    }
+    lastActivity = millis();
+    drawGenerateScreen();
+    return;
   }
 }
 
@@ -2092,16 +2108,27 @@ void handlePINTouch(uint16_t x, uint16_t y) {
 }
 
 void handleHomeTouch(uint16_t x, uint16_t y) {
-  if (y >= 236 && y <= 278 && x >= 12 && x <= 114) { lockVault(); return; }
-  if (y >= 236 && y <= 278 && x >= 126 && x <= 228) {
-    if (aoaActive) {
-      currentScreen = AOA_QR_SCREEN;
-      drawAOAQRScreen();
-    } else {
-      startAOA();
+  if (y >= 236 && y <= 278) {
+    if (x >= 8 && x <= 78) { lockVault(); return; }
+    if (x >= 85 && x <= 155) {
+      if (aoaActive) { currentScreen = AOA_QR_SCREEN; drawAOAQRScreen(); }
+      else startAOA();
+      lastActivity = millis();
+      return;
     }
-    lastActivity = millis();
-    return;
+    if (x >= 162 && x <= 232) {
+      if (bleKeyboardStarted) {
+        bleKeyboard.end();
+        bleKeyboardStarted = false;
+        setStatus("Bluetooth turned off", 2000);
+        Serial.println("BLE HID stopped by user.");
+      } else {
+        setStatus("Bluetooth is already off", 1800);
+      }
+      lastActivity = millis();
+      drawHomeScreen();
+      return;
+    }
   }
   // Match touch hitboxes to the actual button rectangles drawn on the home screen.
   if (x >= 20 && x <= 220 && y >= 96 && y <= 130) {
@@ -2207,16 +2234,16 @@ void handleAccountDetailTouch(uint16_t x, uint16_t y) {
       return;
     }
 
-    // BLE HID starts only after an explicit tap on the BT button.
+    // Enable BLE HID from account details; disabling is available on Vault Home.
     if (!bleKeyboardStarted) {
       bleKeyboard.begin();
       bleKeyboardStarted = true;
-      Serial.println("BLE HID keyboard started on request; advertising for phone pairing.");
-      setStatus("Bluetooth ready - pair your phone", 3500);
+      Serial.println("BLE HID keyboard started from Account Details.");
+      setStatus("Bluetooth on - pair your phone", 2800);
     } else if (bleKeyboard.isConnected()) {
-      setStatus("Bluetooth already connected", 2500);
+      setStatus("Bluetooth connected", 1800);
     } else {
-      setStatus("Bluetooth active - ready to pair", 3000);
+      setStatus("Bluetooth on - pair your phone", 2400);
     }
     lastActivity = millis();
     drawAccountDetailScreen();
