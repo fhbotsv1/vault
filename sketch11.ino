@@ -1706,7 +1706,7 @@ void handleGenerateTouch(uint16_t x, uint16_t y) {
   if (y >= 177 && y <= 215) {
     if (x >= 12 && x <= 114) {
       if (!generatedPasswordReady) { setStatus("No password generated", 1800); drawGenerateScreen(); return; }
-      if (!bleKeyboardStarted || !bleKeyboard.isConnected()) { setStatus("Pair and connect phone by BLE", 2200); drawGenerateScreen(); return; }
+      if (!bleKeyboardStarted || !bleKeyboard.isConnected()) { setStatus("Pair BLE keyboard first", 2200); drawGenerateScreen(); return; }
       bleKeyboard.print(String(generatedPassword));
       lastActivity = millis(); openGeneratedPasswordSaveForm(); return;
     }
