@@ -2042,10 +2042,11 @@ void handleHomeTouch(uint16_t x, uint16_t y) {
     lastActivity = millis();
     return;
   }
-  if (x >= 20 && x <= 220 && y >= 116 && y <= 152) {
+  // Match touch hitboxes to the actual button rectangles drawn on the home screen.
+  if (x >= 20 && x <= 220 && y >= 96 && y <= 130) {
     currentScreen = MY_ACCOUNTS_SCREEN; lastActivity = millis(); drawAccountsScreen(); return;
   }
-  if (x >= 20 && x <= 220 && y >= 160 && y <= 196) {
+  if (x >= 20 && x <= 220 && y >= 136 && y <= 170) {
     if (!vaultStorageReady) { setStatus("Storage unavailable", 2000); drawHomeScreen(); return; }
     if (!loadVaultAccounts() && vaultFileInvalid) {
       Serial.println("Add Account: existing file invalid; preserved.");
@@ -2060,7 +2061,7 @@ void handleHomeTouch(uint16_t x, uint16_t y) {
     Serial.println("Add Account: editor opened. Optional serial entry: SITE=value / USER=value / PASS=value, one command per line.");
     return;
   }
-  if (x >= 20 && x <= 220 && y >= 204 && y <= 240) {
+  if (x >= 20 && x <= 220 && y >= 176 && y <= 210) {
     if (!vaultStorageReady) { setStatus("Storage unavailable", 2000); drawHomeScreen(); return; }
     if (!loadVaultAccounts() && vaultFileInvalid) { setStatus("Invalid vault file - preserved", 2500); drawHomeScreen(); return; }
     if (!SD_MMC.exists(VAULT_FILE)) vaultAccountCount = 0;
