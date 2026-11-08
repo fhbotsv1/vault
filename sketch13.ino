@@ -270,6 +270,8 @@ const uint32_t AOA_LOCKOUT_MS = 30UL * 1000UL;
 String enteredPIN = "";
 uint8_t pinChangeStep = 0;
 String pinOldInput = "", pinNewInput = "", pinConfirmInput = "";
+uint32_t pinPreviewUntil = 0;
+const uint32_t PIN_PREVIEW_MS = 900;
 String settingsMessage = "";
 String statusMessage = "";
 
@@ -1686,7 +1688,11 @@ void drawChangePINScreen() {
   drawHeader("CHANGE PIN");
   lcd.setTextDatum(middle_center); lcd.setTextColor(WHITE, BG); lcd.setTextSize(1);
   lcd.drawString(pinChangeStep == 0 ? "Enter current PIN" : (pinChangeStep == 1 ? "Enter new 4-digit PIN" : "Confirm new PIN"), 120, 64);
-  String masked(pinChangeStep == 0 ? pinOldInput.length() : (pinChangeStep == 1 ? pinNewInput.length() : pinConfirmInput.length()), '*');
+  String entered = pinChangeStep == 0 ? pinOldInput : (pinChangeStep == 1 ? pinNewInput : pinConfirmInput);
+  String masked(entered.length(), '*');
+  if (entered.length() && pinPreviewUntil != 0 && (int32_t)(pinPreviewUntil - millis()) > 0) {
+    masked.setCharAt(masked.length() - 1, entered[entered.length() - 1]);
+  }
   lcd.setTextSize(2); lcd.drawString(masked, 120, 91);
   const char *keys[4][3]={{"1","2","3"},{"4","5","6"},{"7","8","9"},{"C","0","<"}};
   int xs[3]={20,92,164}, ys[4]={119,154,189,224};
@@ -1714,7 +1720,7 @@ void drawSystemInfoScreen() {
 }
 void handleSettingsTouch(uint16_t x,uint16_t y) {
   if(x<20||x>220)return;
-  if(y>=65&&y<=107){pinOldInput="";pinNewInput="";pinConfirmInput="";pinChangeStep=0;settingsMessage="";currentScreen=CHANGE_PIN_SCREEN;drawChangePINScreen();}
+  if(y>=65&&y<=107){pinOldInput="";pinNewInput="";pinConfirmInput="";pinChangeStep=0;pinPreviewUntil=0;settingsMessage="";currentScreen=CHANGE_PIN_SCREEN;drawChangePINScreen();}
   else if(y>=119&&y<=161){currentScreen=SYSTEM_INFO_SCREEN;drawSystemInfoScreen();}
   else if(y>=265&&y<=301){currentScreen=HOME_SCREEN;drawHomeScreen();}
 }
@@ -1723,13 +1729,16 @@ void handleChangePINTouch(uint16_t x,uint16_t y) {
   int col=x<76?0:(x<148?1:(x<=220?2:-1));
   int row=y<149?0:(y<184?1:(y<219?2:(y<254?3:-1)));
   if(col>=0&&row>=0){
-    if(row<3){const char d[3][3]={{'1','2','3'},{'4','5','6'},{'7','8','9'}};if(v->length()<4)*v+=d[row][col];}
-    else if(col==0)*v="";
-    else if(col==1&&v->length()<4)*v+='0';
-    else if(col==2&&v->length())v->remove(v->length()-1);
+    bool digitAdded = false;
+    if(row<3){const char d[3][3]={{'1','2','3'},{'4','5','6'},{'7','8','9'}};if(v->length()<4){*v+=d[row][col];digitAdded=true;}}
+    else if(col==0){*v="";pinPreviewUntil=0;}
+    else if(col==1&&v->length()<4){*v+='0';digitAdded=true;}
+    else if(col==2&&v->length()){v->remove(v->length()-1);pinPreviewUntil=0;}
+    if(digitAdded)pinPreviewUntil=millis()+PIN_PREVIEW_MS;
     drawChangePINScreen();return;
   }
   if(y>=265&&y<=301){
+    pinPreviewUntil=0;
     if(v->length()!=4)settingsMessage="Enter exactly 4 digits";
     else if(pinChangeStep==0){if(!verifyVaultPIN(pinOldInput))settingsMessage="Current PIN is incorrect";else{pinChangeStep=1;settingsMessage="";}}
     else if(pinChangeStep==1){pinChangeStep=2;settingsMessage="";}
@@ -2675,12 +2684,18 @@ void loop() {
   processSerialEntry();
   serviceAOA();
 
-  // Redraw the password field once the brief character-preview window expires.
+  // Redraw masked fields when their brief newest-character preview expires.
   if (currentScreen == ADD_ACCOUNT_SCREEN &&
       passwordPreviewUntil != 0 &&
       (int32_t)(millis() - passwordPreviewUntil) >= 0) {
     passwordPreviewUntil = 0;
     drawAddAccountScreen();
+  }
+  if (currentScreen == CHANGE_PIN_SCREEN &&
+      pinPreviewUntil != 0 &&
+      (int32_t)(millis() - pinPreviewUntil) >= 0) {
+    pinPreviewUntil = 0;
+    drawChangePINScreen();
   }
 
   // Read touchscreen.
