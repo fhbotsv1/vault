@@ -1568,14 +1568,10 @@ void drawHomeScreen() {
   drawButton(20, 136, 200, 34, "Add Account", PANEL);
   drawButton(20, 176, 200, 34, "Generate", PANEL);
   drawButton(20, 216, 200, 34, "Settings", PANEL);
-  drawButton(8, 236, 70, 42, "LOCK", lcd.color565(120, 35, 40), WHITE);
-  drawButton(85, 236, 70, 42, aoaActive ? "AOA QR" : "AOA", aoaActive ? lcd.color565(110, 70, 20) : lcd.color565(0, 105, 125), WHITE);
-  drawButton(162, 236, 70, 42, "B.OFF", bleKeyboardStarted ? lcd.color565(0, 105, 70) : PANEL, WHITE);
   lcd.setTextColor(MUTED, BG);
   lcd.setTextSize(1);
-  if (aoaActive) lcd.drawString("AOA hotspot active", 120, 294);
-  else lcd.drawString(vaultStorageReady ? "Encrypted storage ready" : "Storage unavailable", 120, 294);
-  if (bleKeyboardStarted) lcd.drawString(bleKeyboard.isConnected() ? "Bluetooth connected" : "Bluetooth on - pair your phone", 120, 309);
+  lcd.drawString(aoaActive ? "AOA hotspot active" : (vaultStorageReady ? "Encrypted storage ready" : "Storage unavailable"), 120, 280);
+  if (bleKeyboardStarted) lcd.drawString(bleKeyboard.isConnected() ? "Bluetooth connected" : "Bluetooth on - pair your phone", 120, 296);
 }
 
 
@@ -1612,10 +1608,13 @@ bool saveVaultPIN(const String &candidate) {
 }
 void drawSettingsScreen() {
   drawHeader("SETTINGS");
-  drawButton(20, 65, 200, 42, "Change PIN", PANEL);
-  drawButton(20, 119, 200, 42, "System details", PANEL);
-  drawButton(20, 173, 200, 42, "Fingerprint management", PANEL);
-  drawButton(20, 265, 200, 36, "BACK", PANEL);
+  drawButton(20, 52, 200, 32, "Change PIN", PANEL);
+  drawButton(20, 90, 200, 32, "System details", PANEL);
+  drawButton(20, 128, 200, 32, "Fingerprint management", PANEL);
+  drawButton(20, 170, 200, 32, "LOCK VAULT", lcd.color565(120, 35, 40), WHITE);
+  drawButton(20, 208, 200, 32, aoaActive ? "AOA QR" : "AOA", aoaActive ? lcd.color565(110, 70, 20) : lcd.color565(0, 105, 125), WHITE);
+  drawButton(20, 246, 200, 32, "BLUETOOTH OFF", bleKeyboardStarted ? lcd.color565(0, 105, 70) : PANEL, WHITE);
+  drawButton(20, 284, 200, 32, "BACK", PANEL);
 }
 void drawChangePINScreen() {
   drawHeader("CHANGE PIN");
@@ -1663,14 +1662,28 @@ void drawSystemInfoScreen() {
 }
 void handleSettingsTouch(uint16_t x,uint16_t y) {
   if(x<20||x>220)return;
-  if(y>=65&&y<=107){pinOldInput="";pinNewInput="";pinConfirmInput="";pinChangeStep=0;pinPreviewUntil=0;settingsMessage="";currentScreen=CHANGE_PIN_SCREEN;drawChangePINScreen();}
-  else if(y>=119&&y<=161){currentScreen=SYSTEM_INFO_SCREEN;drawSystemInfoScreen();}
-  else if(y>=173&&y<=215){
+  if(y>=52&&y<=84){pinOldInput="";pinNewInput="";pinConfirmInput="";pinChangeStep=0;pinPreviewUntil=0;settingsMessage="";currentScreen=CHANGE_PIN_SCREEN;drawChangePINScreen();}
+  else if(y>=90&&y<=122){currentScreen=SYSTEM_INFO_SCREEN;drawSystemInfoScreen();}
+  else if(y>=128&&y<=160){
     if(!fingerprintReady){setStatus("Fingerprint sensor unavailable",2200);drawSettingsScreen();return;}
     fingerprintSelectedSlot=1; fingerprintMgmtMessage=""; refreshFingerprintManagementData();
     currentScreen=FINGERPRINT_MGMT_SCREEN; lastActivity=millis(); drawFingerprintManagementScreen();
   }
-  else if(y>=265&&y<=301){currentScreen=HOME_SCREEN;drawHomeScreen();}
+  else if(y>=170&&y<=202){lockVault();return;}
+  else if(y>=208&&y<=240){
+    if(aoaActive){currentScreen=AOA_QR_SCREEN;drawAOAQRScreen();}
+    else startAOA();
+    lastActivity=millis();return;
+  }
+  else if(y>=246&&y<=278){
+    if(bleKeyboardStarted){
+      bleKeyboard.end();bleKeyboardStarted=false;
+      setStatus("Bluetooth turned off",2000);
+      Serial.println("BLE HID stopped by user.");
+    }else setStatus("Bluetooth is already off",1800);
+    lastActivity=millis();drawSettingsScreen();return;
+  }
+  else if(y>=284&&y<=316){currentScreen=HOME_SCREEN;lastActivity=millis();drawHomeScreen();}
 }
 void handleChangePINTouch(uint16_t x,uint16_t y) {
   String *v=pinChangeStep==0?&pinOldInput:(pinChangeStep==1?&pinNewInput:&pinConfirmInput);
@@ -2277,28 +2290,7 @@ void handlePINTouch(uint16_t x, uint16_t y) {
 }
 
 void handleHomeTouch(uint16_t x, uint16_t y) {
-  if (y >= 236 && y <= 278) {
-    if (x >= 8 && x <= 78) { lockVault(); return; }
-    if (x >= 85 && x <= 155) {
-      if (aoaActive) { currentScreen = AOA_QR_SCREEN; drawAOAQRScreen(); }
-      else startAOA();
-      lastActivity = millis();
-      return;
-    }
-    if (x >= 162 && x <= 232) {
-      if (bleKeyboardStarted) {
-        bleKeyboard.end();
-        bleKeyboardStarted = false;
-        setStatus("Bluetooth turned off", 2000);
-        Serial.println("BLE HID stopped by user.");
-      } else {
-        setStatus("Bluetooth is already off", 1800);
-      }
-      lastActivity = millis();
-      drawHomeScreen();
-      return;
-    }
-  }
+  // Home page contains only the four primary navigation buttons.
   // Match touch hitboxes to the actual button rectangles drawn on the home screen.
   if (x >= 20 && x <= 220 && y >= 96 && y <= 130) {
     currentScreen = MY_ACCOUNTS_SCREEN; lastActivity = millis(); drawAccountsScreen(); return;
