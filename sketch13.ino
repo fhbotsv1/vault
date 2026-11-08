@@ -100,7 +100,9 @@ void updateBatteryReading() {
 HijelHID_BLEKeyboard bleKeyboard;
 bool bleKeyboardStarted = false;
 
-const char DEV_PIN[] = "1234";  // Development only
+static const char *DEFAULT_DEV_PIN = "1234";
+String vaultPIN = DEFAULT_DEV_PIN;
+bool vaultConfigReady = false;
 
 // ----- Encrypted storage prototype -----
 // Stage 5 supports multiple encrypted records; existing legacy record is migrated on save.
@@ -223,7 +225,10 @@ enum Screen {
   AOA_QR_SCREEN,
   PASSWORD_MODE_SCREEN,
   PASSWORD_CONFIG_SCREEN,
-  GENERATE_SCREEN
+  GENERATE_SCREEN,
+  SETTINGS_SCREEN,
+  CHANGE_PIN_SCREEN,
+  SYSTEM_INFO_SCREEN
 };
 
 Screen currentScreen = FINGERPRINT_SCREEN;
@@ -289,6 +294,15 @@ uint16_t CYAN, RED, GREEN, BORDER;
 void drawFingerprintScreen();
 void drawPINScreen();
 void drawHomeScreen();
+void drawSettingsScreen();
+void drawChangePINScreen();
+void drawSystemInfoScreen();
+void handleSettingsTouch(uint16_t x, uint16_t y);
+void handleChangePINTouch(uint16_t x, uint16_t y);
+void handleSystemInfoTouch(uint16_t x, uint16_t y);
+bool initVaultConfig();
+bool verifyVaultPIN(const String &candidate);
+bool saveVaultPIN(const String &candidate);
 void drawAOAQRScreen();
 void handleAOAQRScreenTouch(uint16_t x, uint16_t y);
 void lockVault();
@@ -1199,7 +1213,7 @@ void unlockVault() {
     return;
   }
 
-  if (enteredPIN == DEV_PIN) {
+  if (verifyVaultPIN(enteredPIN)) {
     enteredPIN = "";
     statusMessage = "";
 
@@ -1388,7 +1402,7 @@ void handleAOALogin() {
     return;
   }
   String pin = aoaServer.arg("pin");
-  if (pin.length() > 0 && pin == DEV_PIN) {
+  if (pin.length() > 0 && verifyVaultPIN(pin)) {
     pin = "";
     aoaBadPinAttempts = 0;
     aoaAuthenticatedIP = aoaServer.client().remoteIP();
@@ -1616,6 +1630,7 @@ void drawHomeScreen() {
   drawButton(20, 96, 200, 34, "My Accounts", PANEL);
   drawButton(20, 136, 200, 34, "Add Account", PANEL);
   drawButton(20, 176, 200, 34, "Generate", PANEL);
+  drawButton(20, 216, 200, 34, "Settings", PANEL);
   drawButton(8, 236, 70, 42, "LOCK", lcd.color565(120, 35, 40), WHITE);
   drawButton(85, 236, 70, 42, aoaActive ? "AOA QR" : "AOA", aoaActive ? lcd.color565(110, 70, 20) : lcd.color565(0, 105, 125), WHITE);
   drawButton(162, 236, 70, 42, "B.OFF", bleKeyboardStarted ? lcd.color565(0, 105, 70) : PANEL, WHITE);
@@ -1626,6 +1641,99 @@ void drawHomeScreen() {
   if (bleKeyboardStarted) lcd.drawString(bleKeyboard.isConnected() ? "Bluetooth connected" : "Bluetooth on - pair your phone", 120, 309);
 }
 
+
+
+bool initVaultConfig() {
+  Preferences p;
+  if (!p.begin("vaultcfg", false)) return false;
+  String stored = p.getString("pin", "");
+  if (stored.length() == 4) vaultPIN = stored;
+  else {
+    vaultPIN = DEFAULT_DEV_PIN;
+    if (p.putString("pin", vaultPIN) != vaultPIN.length()) { p.end(); return false; }
+  }
+  p.end();
+  return true;
+}
+bool verifyVaultPIN(const String &candidate) {
+  return vaultConfigReady && candidate.length() == 4 && candidate == vaultPIN;
+}
+bool saveVaultPIN(const String &candidate) {
+  if (candidate.length() != 4) return false;
+  Preferences p;
+  if (!p.begin("vaultcfg", false)) return false;
+  size_t n = p.putString("pin", candidate);
+  p.end();
+  if (n != candidate.length()) return false;
+  vaultPIN = candidate;
+  return true;
+}
+void drawSettingsScreen() {
+  drawHeader("SETTINGS");
+  drawButton(20, 65, 200, 42, "Change PIN", PANEL);
+  drawButton(20, 119, 200, 42, "System details", PANEL);
+  drawButton(20, 265, 200, 36, "BACK", PANEL);
+}
+void drawChangePINScreen() {
+  drawHeader("CHANGE PIN");
+  lcd.setTextDatum(middle_center); lcd.setTextColor(WHITE, BG); lcd.setTextSize(1);
+  lcd.drawString(pinChangeStep == 0 ? "Enter current PIN" : (pinChangeStep == 1 ? "Enter new 4-digit PIN" : "Confirm new PIN"), 120, 64);
+  String masked(pinChangeStep == 0 ? pinOldInput.length() : (pinChangeStep == 1 ? pinNewInput.length() : pinConfirmInput.length()), '*');
+  lcd.setTextSize(2); lcd.drawString(masked, 120, 91);
+  const char *keys[4][3]={{"1","2","3"},{"4","5","6"},{"7","8","9"},{"C","0","<"}};
+  int xs[3]={20,92,164}, ys[4]={119,154,189,224};
+  for(int r=0;r<4;r++) for(int c=0;c<3;c++) drawButton(xs[c],ys[r],56,29,keys[r][c],PANEL,WHITE);
+  drawButton(20,265,200,36,"NEXT / SAVE",lcd.color565(0,105,125),WHITE);
+  if(settingsMessage.length()){lcd.setTextSize(1);lcd.setTextColor(RED,BG);lcd.drawString(settingsMessage,120,108);}
+}
+void drawSystemInfoScreen() {
+  drawHeader("SYSTEM DETAILS");
+  lcd.setTextDatum(middle_left); lcd.setTextColor(WHITE,BG); lcd.setTextSize(1);
+  char b[80]; int y=62;
+  snprintf(b,sizeof(b),"RAM free: %u KB / %u KB",ESP.getFreeHeap()/1024,ESP.getHeapSize()/1024); lcd.drawString(b,12,y); y+=24;
+  snprintf(b,sizeof(b),"RAM minimum free: %u KB",ESP.getMinFreeHeap()/1024); lcd.drawString(b,12,y); y+=24;
+  snprintf(b,sizeof(b),"Flash chip: %u MB",ESP.getFlashChipSize()/1048576); lcd.drawString(b,12,y); y+=24;
+  snprintf(b,sizeof(b),"Sketch: %u KB",ESP.getSketchSize()/1024); lcd.drawString(b,12,y); y+=24;
+  snprintf(b,sizeof(b),"Free OTA space: %u KB",ESP.getFreeSketchSpace()/1024); lcd.drawString(b,12,y); y+=24;
+  if(SD_MMC.cardSize()>0) {
+    snprintf(b,sizeof(b),"SD total: %u MB",SD_MMC.totalBytes()/1048576); lcd.drawString(b,12,y); y+=24;
+    snprintf(b,sizeof(b),"SD used: %u MB",SD_MMC.usedBytes()/1048576); lcd.drawString(b,12,y); y+=24;
+    snprintf(b,sizeof(b),"SD free: %u MB",(SD_MMC.totalBytes()-SD_MMC.usedBytes())/1048576); lcd.drawString(b,12,y); y+=24;
+  } else { lcd.drawString("SD card: unavailable",12,y); y+=24; }
+  if(vaultStorageReady && loadVaultAccounts()) { snprintf(b,sizeof(b),"Credentials: %u",vaultAccountCount); lcd.drawString(b,12,y); }
+  else lcd.drawString("Credentials: unavailable",12,y);
+  drawButton(20,275,200,34,"BACK",PANEL);
+}
+void handleSettingsTouch(uint16_t x,uint16_t y) {
+  if(x<20||x>220)return;
+  if(y>=65&&y<=107){pinOldInput="";pinNewInput="";pinConfirmInput="";pinChangeStep=0;settingsMessage="";currentScreen=CHANGE_PIN_SCREEN;drawChangePINScreen();}
+  else if(y>=119&&y<=161){currentScreen=SYSTEM_INFO_SCREEN;drawSystemInfoScreen();}
+  else if(y>=265&&y<=301){currentScreen=HOME_SCREEN;drawHomeScreen();}
+}
+void handleChangePINTouch(uint16_t x,uint16_t y) {
+  String *v=pinChangeStep==0?&pinOldInput:(pinChangeStep==1?&pinNewInput:&pinConfirmInput);
+  int col=x<76?0:(x<148?1:(x<=220?2:-1));
+  int row=y<149?0:(y<184?1:(y<219?2:(y<254?3:-1)));
+  if(col>=0&&row>=0){
+    if(row<3){const char d[3][3]={{'1','2','3'},{'4','5','6'},{'7','8','9'}};if(v->length()<4)*v+=d[row][col];}
+    else if(col==0)*v="";
+    else if(col==1&&v->length()<4)*v+='0';
+    else if(col==2&&v->length())v->remove(v->length()-1);
+    drawChangePINScreen();return;
+  }
+  if(y>=265&&y<=301){
+    if(v->length()!=4)settingsMessage="Enter exactly 4 digits";
+    else if(pinChangeStep==0){if(!verifyVaultPIN(pinOldInput))settingsMessage="Current PIN is incorrect";else{pinChangeStep=1;settingsMessage="";}}
+    else if(pinChangeStep==1){pinChangeStep=2;settingsMessage="";}
+    else if(pinNewInput!=pinConfirmInput){pinChangeStep=1;pinConfirmInput="";settingsMessage="PINs do not match";}
+    else if(saveVaultPIN(pinNewInput)){pinOldInput="";pinNewInput="";pinConfirmInput="";pinChangeStep=0;currentScreen=SETTINGS_SCREEN;drawSettingsScreen();setStatus("PIN updated",2000);return;}
+    else settingsMessage="Could not save PIN";
+    drawChangePINScreen();
+  }
+}
+void handleSystemInfoTouch(uint16_t x,uint16_t y) {
+  if(x>=20&&x<=220&&y>=275&&y<=309){currentScreen=SETTINGS_SCREEN;drawSettingsScreen();}
+}
 
 static void secureClearGeneratedPassword() {
   volatile char *p = generatedPassword;
@@ -2151,6 +2259,9 @@ void handleHomeTouch(uint16_t x, uint16_t y) {
     Serial.println("Add Account: editor opened. Optional serial entry: SITE=value / USER=value / PASS=value, one command per line.");
     return;
   }
+  if (x >= 20 && x <= 220 && y >= 216 && y <= 250) {
+    currentScreen = SETTINGS_SCREEN; lastActivity = millis(); drawSettingsScreen(); return;
+  }
   if (x >= 20 && x <= 220 && y >= 176 && y <= 210) {
     if (!vaultStorageReady) { setStatus("Storage unavailable", 2000); drawHomeScreen(); return; }
     if (!loadVaultAccounts() && vaultFileInvalid) { setStatus("Invalid vault file - preserved", 2500); drawHomeScreen(); return; }
@@ -2497,6 +2608,7 @@ void setup() {
   aoaServer.onNotFound(handleAOANotFound);
 
   // Initialize encrypted microSD storage without formatting the card.
+  vaultConfigReady = initVaultConfig();
   vaultStorageReady = initVaultStorage();
   Serial.printf("Encrypted storage: %s\n", vaultStorageReady ? "ready" : "unavailable");
 
@@ -2585,6 +2697,12 @@ void loop() {
       handlePasswordConfigTouch(x, y);
     } else if (currentScreen == GENERATE_SCREEN) {
       handleGenerateTouch(x, y);
+    } else if (currentScreen == SETTINGS_SCREEN) {
+      handleSettingsTouch(x, y);
+    } else if (currentScreen == CHANGE_PIN_SCREEN) {
+      handleChangePINTouch(x, y);
+    } else if (currentScreen == SYSTEM_INFO_SCREEN) {
+      handleSystemInfoTouch(x, y);
     } else {
       handleHomeTouch(x, y);
     }
@@ -2620,7 +2738,10 @@ void loop() {
        currentScreen == AOA_QR_SCREEN ||
        currentScreen == PASSWORD_MODE_SCREEN ||
        currentScreen == PASSWORD_CONFIG_SCREEN ||
-       currentScreen == GENERATE_SCREEN) &&
+       currentScreen == GENERATE_SCREEN ||
+       currentScreen == SETTINGS_SCREEN ||
+       currentScreen == CHANGE_PIN_SCREEN ||
+       currentScreen == SYSTEM_INFO_SCREEN) &&
       millis() - lastActivity >= AUTO_LOCK_MS) {
     lockVault();
   }
