@@ -2521,7 +2521,14 @@ void processSerialEntry() {
     if (c == '\r') continue;
     if (c == '\n') {
       String line = serialLineBuffer; serialLineBuffer = ""; line.trim();
-      if (currentScreen == ADD_ACCOUNT_SCREEN) {
+      if (line == "RESET_PIN") {
+        if (saveVaultPIN(String(DEFAULT_DEV_PIN))) {
+          Serial.println("PIN RESET SUCCESSFUL. Default PIN is 1234.");
+        } else {
+          Serial.println("PIN RESET FAILED. NVS could not be written.");
+        }
+        line = "";
+      } else if (currentScreen == ADD_ACCOUNT_SCREEN) {
         lastActivity = millis();
         if (line.startsWith("SITE=")) editSite = line.substring(5);
         else if (line.startsWith("USER=")) editUser = line.substring(5);
