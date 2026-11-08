@@ -1689,16 +1689,26 @@ void drawChangePINScreen() {
   lcd.setTextDatum(middle_center); lcd.setTextColor(WHITE, BG); lcd.setTextSize(1);
   lcd.drawString(pinChangeStep == 0 ? "Enter current PIN" : (pinChangeStep == 1 ? "Enter new 4-digit PIN" : "Confirm new PIN"), 120, 64);
   String entered = pinChangeStep == 0 ? pinOldInput : (pinChangeStep == 1 ? pinNewInput : pinConfirmInput);
-  String masked(entered.length(), '*');
-  if (entered.length() && pinPreviewUntil != 0 && (int32_t)(pinPreviewUntil - millis()) > 0) {
-    masked.setCharAt(masked.length() - 1, entered[entered.length() - 1]);
+  String masked = "";
+  for (size_t i = 0; i < 4; ++i) {
+    if (i < entered.length()) masked += '*';
+    else masked += '_';
   }
-  lcd.setTextSize(2); lcd.drawString(masked, 120, 91);
+  if (entered.length() && pinPreviewUntil != 0 && (int32_t)(pinPreviewUntil - millis()) > 0) {
+    masked.setCharAt(entered.length() - 1, entered[entered.length() - 1]);
+  }
+  // Dedicated PIN input field, visually separated from the keypad.
+  lcd.fillRoundRect(20, 78, 200, 30, 5, lcd.color565(18, 28, 42));
+  lcd.drawRoundRect(20, 78, 200, 30, 5, CYAN);
+  lcd.setTextDatum(middle_center);
+  lcd.setTextColor(WHITE, lcd.color565(18, 28, 42));
+  lcd.setTextSize(2);
+  lcd.drawString(masked, 120, 93);
   const char *keys[4][3]={{"1","2","3"},{"4","5","6"},{"7","8","9"},{"C","0","<"}};
   int xs[3]={20,92,164}, ys[4]={119,154,189,224};
   for(int r=0;r<4;r++) for(int c=0;c<3;c++) drawButton(xs[c],ys[r],56,29,keys[r][c],PANEL,WHITE);
   drawButton(20,265,200,36,"NEXT / SAVE",lcd.color565(0,105,125),WHITE);
-  if(settingsMessage.length()){lcd.setTextSize(1);lcd.setTextColor(RED,BG);lcd.drawString(settingsMessage,120,108);}
+  if(settingsMessage.length()){lcd.setTextDatum(middle_center);lcd.setTextSize(1);lcd.setTextColor(RED,BG);lcd.drawString(settingsMessage,120,112);}
 }
 void drawSystemInfoScreen() {
   drawHeader("SYSTEM DETAILS");
