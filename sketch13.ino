@@ -1786,7 +1786,8 @@ bool checkFingerprintSlot(uint16_t slot, bool &occupied) {
   if(!fingerprintReady||slot<1||slot>finger.capacity)return false;
   uint8_t p=finger.loadModel(slot);
   if(p==FINGERPRINT_OK){occupied=true;return true;}
-  if(p==FINGERPRINT_BADLOCATION||p==FINGERPRINT_NOTFOUND)return true;
+  // Empty template slots may be reported as DBRANGEFAIL by R30x sensors.
+  if(p==FINGERPRINT_BADLOCATION||p==FINGERPRINT_NOTFOUND||p==FINGERPRINT_DBRANGEFAIL)return true;
   Serial.printf("Fingerprint slot check failed: ID %u, code %u\\n",slot,p);
   return false;
 }
