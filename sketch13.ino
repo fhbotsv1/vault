@@ -228,7 +228,9 @@ enum Screen {
   GENERATE_SCREEN,
   SETTINGS_SCREEN,
   CHANGE_PIN_SCREEN,
-  SYSTEM_INFO_SCREEN
+  SYSTEM_INFO_SCREEN,
+  FINGERPRINT_MGMT_SCREEN,
+  FINGERPRINT_DELETE_CONFIRM_SCREEN
 };
 
 Screen currentScreen = FINGERPRINT_SCREEN;
@@ -274,6 +276,10 @@ uint32_t pinPreviewUntil = 0;
 const uint32_t PIN_PREVIEW_MS = 900;
 String settingsMessage = "";
 String statusMessage = "";
+uint16_t fingerprintSelectedSlot = 1;
+uint16_t fingerprintStoredCount = 0;
+bool fingerprintSelectedSlotOccupied = false;
+String fingerprintMgmtMessage = "";
 
 uint32_t statusUntil = 0;
 uint32_t lastActivity = 0;
@@ -305,6 +311,14 @@ void drawSystemInfoScreen();
 void handleSettingsTouch(uint16_t x, uint16_t y);
 void handleChangePINTouch(uint16_t x, uint16_t y);
 void handleSystemInfoTouch(uint16_t x, uint16_t y);
+void drawFingerprintManagementScreen();
+void handleFingerprintManagementTouch(uint16_t x, uint16_t y);
+void drawFingerprintDeleteConfirmScreen();
+void handleFingerprintDeleteConfirmTouch(uint16_t x, uint16_t y);
+bool checkFingerprintSlot(uint16_t slot, bool &occupied);
+bool findNextFreeFingerprintSlot(uint16_t startSlot, uint16_t &freeSlot);
+bool enrollFingerprintAtSlot(uint16_t slot);
+void refreshFingerprintManagementData();
 bool initVaultConfig();
 bool verifyVaultPIN(const String &candidate);
 bool saveVaultPIN(const String &candidate);
@@ -1682,6 +1696,7 @@ void drawSettingsScreen() {
   drawHeader("SETTINGS");
   drawButton(20, 65, 200, 42, "Change PIN", PANEL);
   drawButton(20, 119, 200, 42, "System details", PANEL);
+  drawButton(20, 173, 200, 42, "Fingerprint management", PANEL);
   drawButton(20, 265, 200, 36, "BACK", PANEL);
 }
 void drawChangePINScreen() {
@@ -1732,6 +1747,11 @@ void handleSettingsTouch(uint16_t x,uint16_t y) {
   if(x<20||x>220)return;
   if(y>=65&&y<=107){pinOldInput="";pinNewInput="";pinConfirmInput="";pinChangeStep=0;pinPreviewUntil=0;settingsMessage="";currentScreen=CHANGE_PIN_SCREEN;drawChangePINScreen();}
   else if(y>=119&&y<=161){currentScreen=SYSTEM_INFO_SCREEN;drawSystemInfoScreen();}
+  else if(y>=173&&y<=215){
+    if(!fingerprintReady){setStatus("Fingerprint sensor unavailable",2200);drawSettingsScreen();return;}
+    fingerprintSelectedSlot=1; fingerprintMgmtMessage=""; refreshFingerprintManagementData();
+    currentScreen=FINGERPRINT_MGMT_SCREEN; lastActivity=millis(); drawFingerprintManagementScreen();
+  }
   else if(y>=265&&y<=301){currentScreen=HOME_SCREEN;drawHomeScreen();}
 }
 void handleChangePINTouch(uint16_t x,uint16_t y) {
@@ -1761,6 +1781,99 @@ void handleChangePINTouch(uint16_t x,uint16_t y) {
 void handleSystemInfoTouch(uint16_t x,uint16_t y) {
   if(x>=20&&x<=220&&y>=275&&y<=309){currentScreen=SETTINGS_SCREEN;drawSettingsScreen();}
 }
+bool checkFingerprintSlot(uint16_t slot, bool &occupied) {
+  occupied=false;
+  if(!fingerprintReady||slot<1||slot>finger.capacity)return false;
+  uint8_t p=finger.loadModel(slot);
+  if(p==FINGERPRINT_OK){occupied=true;return true;}
+  if(p==FINGERPRINT_BADLOCATION||p==FINGERPRINT_NOTFOUND)return true;
+  Serial.printf("Fingerprint slot check failed: ID %u, code %u\\n",slot,p);
+  return false;
+}
+bool findNextFreeFingerprintSlot(uint16_t startSlot,uint16_t &freeSlot) {
+  if(!fingerprintReady||finger.capacity==0)return false;
+  if(startSlot<1||startSlot>finger.capacity)startSlot=1;
+  for(uint16_t i=0;i<finger.capacity;i++){
+    uint16_t id=((startSlot-1+i)%finger.capacity)+1; bool used=false;
+    if(!checkFingerprintSlot(id,used))return false;
+    if(!used){freeSlot=id;return true;}
+  }
+  return false;
+}
+void refreshFingerprintManagementData(){
+  if(!fingerprintReady)return;
+  if(finger.getTemplateCount()==FINGERPRINT_OK)fingerprintStoredCount=finger.templateCount;
+  else fingerprintMgmtMessage="Could not read template count";
+  if(fingerprintSelectedSlot<1||fingerprintSelectedSlot>finger.capacity)fingerprintSelectedSlot=1;
+  bool used=false;
+  if(checkFingerprintSlot(fingerprintSelectedSlot,used))fingerprintSelectedSlotOccupied=used;
+  else fingerprintMgmtMessage="Sensor communication error";
+}
+void drawFingerprintManagementScreen(){
+  drawHeader("FINGERPRINTS");
+  lcd.setTextDatum(middle_center);lcd.setTextColor(MUTED,BG);lcd.setTextSize(1);
+  char count[40];snprintf(count,sizeof(count),"Stored: %u / %u",fingerprintStoredCount,finger.capacity);lcd.drawString(count,120,59);
+  lcd.setTextColor(WHITE,BG);lcd.drawString("Selected template slot",120,82);
+  drawButton(16,94,48,32,"-",PANEL,WHITE);
+  char idText[20];snprintf(idText,sizeof(idText),"ID %u",fingerprintSelectedSlot);
+  uint16_t fieldBg=lcd.color565(18,28,42);
+  lcd.fillRoundRect(72,94,96,32,5,fieldBg);lcd.drawRoundRect(72,94,96,32,5,CYAN);
+  lcd.setTextColor(CYAN,fieldBg);lcd.setTextSize(2);lcd.drawString(idText,120,110);
+  drawButton(176,94,48,32,"+",PANEL,WHITE);
+  lcd.setTextSize(1);lcd.setTextColor(fingerprintSelectedSlotOccupied?RED:GREEN,BG);
+  lcd.drawString(fingerprintSelectedSlotOccupied?"OCCUPIED - fingerprint saved":"EMPTY - available for enrolment",120,139);
+  drawButton(16,157,98,38,"NEXT FREE",lcd.color565(0,105,125),WHITE);
+  drawButton(126,157,98,38,"ENROL",lcd.color565(0,105,70),WHITE);
+  drawButton(16,207,208,38,"DELETE SELECTED",lcd.color565(120,35,40),WHITE);
+  if(fingerprintMgmtMessage.length()){lcd.setTextColor(RED,BG);lcd.setTextSize(1);lcd.drawString(fingerprintMgmtMessage,120,257);}
+  drawButton(20,275,200,34,"BACK",PANEL,WHITE);
+}
+void drawFingerprintDeleteConfirmScreen(){
+  drawHeader("DELETE FINGERPRINT");lcd.setTextDatum(middle_center);lcd.setTextColor(WHITE,BG);lcd.setTextSize(1);
+  char msg[40];snprintf(msg,sizeof(msg),"Delete template ID %u?",fingerprintSelectedSlot);lcd.drawString(msg,120,91);
+  lcd.setTextColor(RED,BG);lcd.drawString("This cannot be undone.",120,119);
+  drawButton(16,177,96,42,"CANCEL",PANEL,WHITE);
+  drawButton(128,177,96,42,"DELETE",lcd.color565(120,35,40),WHITE);
+}
+bool waitForFingerprintImage(const char *prompt,uint32_t timeoutMs){
+  lcd.fillRect(8,55,224,205,BG);lcd.setTextDatum(middle_center);lcd.setTextColor(CYAN,BG);lcd.setTextSize(2);lcd.drawString("ENROLL FINGER",120,82);
+  lcd.setTextColor(WHITE,BG);lcd.setTextSize(1);lcd.drawString(prompt,120,120);lcd.drawString("Waiting for sensor...",120,151);
+  uint32_t start=millis();
+  while(millis()-start<timeoutMs){uint8_t p=finger.getImage();if(p==FINGERPRINT_OK)return true;if(p!=FINGERPRINT_NOFINGER&&p!=FINGERPRINT_PACKETRECIEVEERR)Serial.printf("Fingerprint capture code %u\\n",p);delay(60);}
+  return false;
+}
+bool waitForFingerprintRemoval(uint32_t timeoutMs){
+  lcd.fillRect(8,55,224,205,BG);lcd.setTextDatum(middle_center);lcd.setTextColor(CYAN,BG);lcd.setTextSize(2);lcd.drawString("REMOVE FINGER",120,100);
+  lcd.setTextColor(WHITE,BG);lcd.setTextSize(1);lcd.drawString("Lift your finger from sensor",120,135);
+  uint32_t start=millis();while(millis()-start<timeoutMs){if(finger.getImage()==FINGERPRINT_NOFINGER)return true;delay(60);}return false;
+}
+bool enrollFingerprintAtSlot(uint16_t slot){
+  if(!fingerprintReady||slot<1||slot>finger.capacity)return false;
+  bool used=false;if(!checkFingerprintSlot(slot,used)||used){fingerprintMgmtMessage=used?"Slot is already occupied":"Could not check slot";return false;}
+  if(!waitForFingerprintImage("Place finger on sensor",15000)){fingerprintMgmtMessage="First scan timed out";return false;}
+  uint8_t p=finger.image2Tz(1);if(p!=FINGERPRINT_OK){fingerprintMgmtMessage="First scan could not be processed";return false;}
+  if(!waitForFingerprintRemoval(10000)){fingerprintMgmtMessage="Finger was not removed";return false;}
+  if(!waitForFingerprintImage("Place the SAME finger again",15000)){fingerprintMgmtMessage="Second scan timed out";return false;}
+  p=finger.image2Tz(2);if(p!=FINGERPRINT_OK){fingerprintMgmtMessage="Second scan could not be processed";return false;}
+  p=finger.createModel();if(p!=FINGERPRINT_OK){fingerprintMgmtMessage=p==FINGERPRINT_ENROLLMISMATCH?"Scans did not match - retry":"Could not create fingerprint";return false;}
+  p=finger.storeModel(slot);if(p!=FINGERPRINT_OK){fingerprintMgmtMessage="Could not save template to sensor";return false;}
+  Serial.printf("Fingerprint enrolled in template ID %u\\n",slot);fingerprintMgmtMessage="Fingerprint enrolled successfully";return true;
+}
+void handleFingerprintManagementTouch(uint16_t x,uint16_t y){
+  if(y>=275&&y<=309&&x>=20&&x<=220){currentScreen=SETTINGS_SCREEN;fingerprintMgmtMessage="";drawSettingsScreen();return;}
+  if(y>=94&&y<=126){if(x>=16&&x<=64&&fingerprintSelectedSlot>1)fingerprintSelectedSlot--;else if(x>=176&&x<=224&&fingerprintSelectedSlot<finger.capacity)fingerprintSelectedSlot++;refreshFingerprintManagementData();drawFingerprintManagementScreen();return;}
+  if(y>=157&&y<=195){
+    if(x>=16&&x<=114){uint16_t freeID=0;if(findNextFreeFingerprintSlot(fingerprintSelectedSlot,freeID)){fingerprintSelectedSlot=freeID;fingerprintMgmtMessage="Next empty slot selected";}else fingerprintMgmtMessage="No free slot or sensor error";refreshFingerprintManagementData();drawFingerprintManagementScreen();return;}
+    if(x>=126&&x<=224){refreshFingerprintManagementData();if(fingerprintSelectedSlotOccupied){fingerprintMgmtMessage="Choose an empty slot first";drawFingerprintManagementScreen();return;}fingerprintMgmtMessage="";lastActivity=millis();bool ok=enrollFingerprintAtSlot(fingerprintSelectedSlot);refreshFingerprintManagementData();drawFingerprintManagementScreen();if(ok)setStatus("Fingerprint enrolled",2200);return;}
+  }
+  if(y>=207&&y<=245&&x>=16&&x<=224){refreshFingerprintManagementData();if(!fingerprintSelectedSlotOccupied){fingerprintMgmtMessage="Selected slot is empty";drawFingerprintManagementScreen();return;}currentScreen=FINGERPRINT_DELETE_CONFIRM_SCREEN;drawFingerprintDeleteConfirmScreen();}
+}
+void handleFingerprintDeleteConfirmTouch(uint16_t x,uint16_t y){
+  if(y<177||y>219)return;
+  if(x>=16&&x<=112){currentScreen=FINGERPRINT_MGMT_SCREEN;drawFingerprintManagementScreen();return;}
+  if(x>=128&&x<=224){uint8_t p=finger.deleteModel(fingerprintSelectedSlot);if(p==FINGERPRINT_OK){Serial.printf("Fingerprint template ID %u deleted.\\n",fingerprintSelectedSlot);fingerprintMgmtMessage="Fingerprint deleted";}else{Serial.printf("Fingerprint delete failed for ID %u (code %u)\\n",fingerprintSelectedSlot,p);fingerprintMgmtMessage="Delete failed - sensor error";}currentScreen=FINGERPRINT_MGMT_SCREEN;refreshFingerprintManagementData();drawFingerprintManagementScreen();}
+}
+
 
 static void secureClearGeneratedPassword() {
   volatile char *p = generatedPassword;
@@ -2743,6 +2856,10 @@ void loop() {
       handleChangePINTouch(x, y);
     } else if (currentScreen == SYSTEM_INFO_SCREEN) {
       handleSystemInfoTouch(x, y);
+    } else if (currentScreen == FINGERPRINT_MGMT_SCREEN) {
+      handleFingerprintManagementTouch(x, y);
+    } else if (currentScreen == FINGERPRINT_DELETE_CONFIRM_SCREEN) {
+      handleFingerprintDeleteConfirmTouch(x, y);
     } else {
       handleHomeTouch(x, y);
     }
@@ -2781,7 +2898,9 @@ void loop() {
        currentScreen == GENERATE_SCREEN ||
        currentScreen == SETTINGS_SCREEN ||
        currentScreen == CHANGE_PIN_SCREEN ||
-       currentScreen == SYSTEM_INFO_SCREEN) &&
+       currentScreen == SYSTEM_INFO_SCREEN ||
+       currentScreen == FINGERPRINT_MGMT_SCREEN ||
+       currentScreen == FINGERPRINT_DELETE_CONFIRM_SCREEN) &&
       millis() - lastActivity >= AUTO_LOCK_MS) {
     lockVault();
   }
