@@ -1656,6 +1656,7 @@ bool initVaultConfig() {
     if (p.putString("pin", vaultPIN) != vaultPIN.length()) { p.end(); return false; }
   }
   p.end();
+  Serial.printf("PIN config: %s; stored length=%u digits\\n", vaultPIN.length() == 4 ? "loaded" : "invalid", (unsigned)vaultPIN.length());
   return true;
 }
 bool verifyVaultPIN(const String &candidate) {
@@ -1667,8 +1668,12 @@ bool saveVaultPIN(const String &candidate) {
   if (!p.begin("vaultcfg", false)) return false;
   size_t n = p.putString("pin", candidate);
   p.end();
-  if (n != candidate.length()) return false;
+  if (n == 0) {
+    Serial.println("PIN config: NVS write failed.");
+    return false;
+  }
   vaultPIN = candidate;
+  Serial.printf("PIN config: updated in NVS (%u digits).\\n", (unsigned)candidate.length());
   return true;
 }
 void drawSettingsScreen() {
