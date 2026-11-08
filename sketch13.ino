@@ -1442,7 +1442,7 @@ void handleAOAManage(){
   lastActivity=millis();if(!aoaIsAdmin()){aoaServer.send(403,"text/plain","Master PIN required");return;}
   bool ok=loadVaultAccounts();if(!ok&&(vaultFileInvalid||SD_MMC.exists(VAULT_FILE))){aoaServer.send(500,"text/html",aoaPage(F("<p class='err'>Vault validation failed.</p>")));return;}if(!SD_MMC.exists(VAULT_FILE))vaultAccountCount=0;
   String b=F("<p class='ok'>Master access — credentials are shown below.</p>");b+=F("<p class='note'>");b+=String(vaultAccountCount);b+=F(" stored credential(s).</p>");
-  int page=aoaServer.hasArg("page")?max(0,aoaServer.arg("page").toInt()):0;const int per=12;int pages=max(1,((int)vaultAccountCount+per-1)/per);if(page>=pages)page=pages-1;
+  int page=aoaServer.hasArg("page")?((int)aoaServer.arg("page").toInt()):0;if(page<0)page=0;const int per=12;int pages=max(1,((int)vaultAccountCount+per-1)/per);if(page>=pages)page=pages-1;
   for(int i=page*per;i<min((int)vaultAccountCount,(page+1)*per);i++){
     b+=F("<div class='item'><b>");b+=String(i+1);b+=F(". ");b+=aoaHtmlEscape(vaultAccounts[i].site);b+=F("</b><br><span class='note'>");b+=aoaHtmlEscape(vaultAccounts[i].user);b+=F("</span><div class='actions'><a class='btn' href='/view?id=");b+=String(i);b+=F("'>View</a><a class='btn secondary' href='/edit?id=");b+=String(i);b+=F("'>Edit</a><form method='POST' action='/delete'><input type='hidden' name='id' value='");b+=String(i);b+=F("'><button class='danger wide' onclick=\"return confirm('Delete permanently?')\">Delete</button></form></div></div>");
   }
