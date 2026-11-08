@@ -264,6 +264,8 @@ IPAddress aoaAuthenticatedIP(0, 0, 0, 0);
 uint32_t aoaSessionUntil = 0;
 uint32_t aoaPinLockoutUntil = 0;
 uint8_t aoaBadPinAttempts = 0;
+uint8_t aoaAccessLevel = 0; // 1 temporary add-only, 2 master administrator
+String aoaTemporaryPIN = "";
 const uint32_t AOA_SESSION_MS = 5UL * 60UL * 1000UL;
 const uint32_t AOA_LOCKOUT_MS = 30UL * 1000UL;
 
@@ -353,8 +355,16 @@ void handleAOALogin();
 void handleAOAAdd();
 void handleAOAPing();
 void handleAOANotFound();
+void handleAOAManage();
+void handleAOAView();
+void handleAOAEdit();
+void handleAOAUpdate();
+void handleAOADelete();
 bool aoaClientAuthenticated();
-String aoaPage(const String &body, const String &title = "AOA - Add Over Air");
+bool aoaIsAdmin();
+int aoaAccountIndex();
+String aoaHtmlEscape(const String &value);
+String aoaPage(const String &body, const String &title = "AOA - Vault");
 bool validAOAField(const String &value, size_t maxLen);
 
 // =================================================
@@ -825,18 +835,25 @@ bool loadVaultAccounts() {
       if (line.length() && !addParsedAccount(line)) { parsed = false; break; }
       pos = nl + 1;
     }
-    if (vaultAccountCount == 0) parsed = false;
+    if (vaultAccountCount == 0 && decoded == "PV2\n") parsed = true;
+    else if (vaultAccountCount == 0) parsed = false;
   } else {
     parsed = addParsedAccount(decoded); // existing legacy single-record file
   }
   decoded = "";
-  if (!parsed || vaultAccountCount == 0) {
+  if (!parsed) {
     vaultAccountCount = 0;
     vaultFileInvalid = true;
     Serial.println("Vault: decrypted account list is invalid; file preserved.");
     return false;
   }
 
+  if (vaultAccountCount == 0) {
+    selectedAccount = 0; accountSite = ""; accountUser = ""; accountPassword = "";
+    accountLoaded = false; vaultFileInvalid = false;
+    Serial.println("Vault: valid empty vault loaded.");
+    return true;
+  }
   if (selectedAccount >= vaultAccountCount) selectedAccount = 0;
   accountSite = vaultAccounts[selectedAccount].site;
   accountUser = vaultAccounts[selectedAccount].user;
@@ -853,7 +870,7 @@ bool loadVaultAccount() {
 }
 
 bool saveAllAccounts() {
-  if (!vaultStorageReady || vaultAccountCount == 0 || vaultAccountCount > MAX_ACCOUNTS) return false;
+  if (!vaultStorageReady || vaultAccountCount > MAX_ACCOUNTS) return false;
   String payload = "PV2\n";
   for (uint8_t i = 0; i < vaultAccountCount; i++) {
     const VaultAccount &a = vaultAccounts[i];
@@ -1360,217 +1377,118 @@ if (fingerprintWaitingForRemoval) {
 }
 
 // =================================================
-// AOA - ADD OVER AIR (ADD-ONLY WEB INTERFACE)
+// AOA - TEMPORARY ADD-ONLY PIN + MASTER ADMIN
 // =================================================
-
-String aoaPage(const String &body, const String &title) {
-  String html;
-  html.reserve(body.length() + 1000);
-  html += F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>");
-  html += F("<meta http-equiv='Cache-Control' content='no-store'><title>");
-  html += title;
-  html += F("</title><style>body{font-family:Arial,sans-serif;background:#0f1623;color:#f5f8ff;margin:0;padding:22px}main{max-width:420px;margin:auto;background:#233042;padding:20px;border-radius:14px}h2{margin-top:0;color:#46dcf0}label{display:block;margin:14px 0 5px}input{box-sizing:border-box;width:100%;padding:12px;border-radius:7px;border:1px solid #789;background:#101a28;color:white;font-size:16px}button{margin-top:18px;width:100%;padding:13px;border:0;border-radius:8px;background:#087e91;color:white;font-size:16px;font-weight:bold}.note{font-size:13px;color:#b0bed0;line-height:1.45}.ok{color:#5ae696}.err{color:#ff777d}</style></head><body><main>");
-  html += F("<h2>ES3C28P Vault</h2><p class='note'>AOA — Add Over Air. This page can add credentials only. It cannot list, view, edit, or delete saved accounts.</p>");
-  html += body;
-  html += F("</main>");
-  // Keep the device from auto-locking while the owner is actively entering data.
-  html += F("<script>setInterval(()=>fetch('/ping',{cache:'no-store'}).catch(()=>{}),20000);</script></body></html>");
-  return html;
+String aoaHtmlEscape(const String &v) {
+  String o; o.reserve(v.length()+8);
+  for(size_t i=0;i<v.length();i++){char c=v[i];if(c=='&')o+="&amp;";else if(c=='<')o+="&lt;";else if(c=='>')o+="&gt;";else if(c=='"')o+="&quot;";else if(c=='\'')o+="&#39;";else o+=c;}
+  return o;
 }
-
-bool aoaClientAuthenticated() {
-  if (!aoaActive || aoaAuthenticatedIP == IPAddress(0, 0, 0, 0)) return false;
-  if ((int32_t)(millis() - aoaSessionUntil) >= 0) {
-    aoaAuthenticatedIP = IPAddress(0, 0, 0, 0);
-    return false;
-  }
-  return aoaServer.client().remoteIP() == aoaAuthenticatedIP;
+String aoaPage(const String &body,const String &title) {
+  String h;h.reserve(body.length()+900);
+  h+=F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='Cache-Control' content='no-store'><title>");
+  h+=aoaHtmlEscape(title);
+  h+=F("</title><style>body{font-family:Arial;background:#0f1623;color:#f5f8ff;margin:0;padding:18px}main{max-width:520px;margin:auto;background:#233042;padding:18px;border-radius:14px}h2,h3{color:#46dcf0}label{display:block;margin:14px 0 5px}input{box-sizing:border-box;width:100%;padding:12px;border-radius:7px;border:1px solid #789;background:#101a28;color:white;font-size:16px}button,.btn{display:inline-block;box-sizing:border-box;margin-top:12px;padding:11px;border:0;border-radius:8px;background:#087e91;color:white;font-weight:bold;text-decoration:none;text-align:center}.wide{width:100%}.danger{background:#9b3038}.secondary{background:#45566c}.item{background:#172333;border:1px solid #40536b;border-radius:9px;padding:12px;margin:10px 0;overflow-wrap:anywhere}.note{font-size:13px;color:#b0bed0;line-height:1.45}.ok{color:#5ae696}.err{color:#ff777d}.actions{display:flex;gap:8px;flex-wrap:wrap}.actions>*{flex:1;min-width:70px}.value{overflow-wrap:anywhere;white-space:pre-wrap}</style></head><body><main><h2>ES3C28P Vault</h2>");
+  h+=body;h+=F("</main><script>setInterval(()=>fetch('/ping',{cache:'no-store'}).catch(()=>{}),20000);</script></body></html>");return h;
 }
-
-bool validAOAField(const String &value, size_t maxLen) {
-  if (value.length() == 0 || value.length() > maxLen) return false;
-  for (size_t i = 0; i < value.length(); i++) {
-    char c = value[i];
-    if (c == '|' || c == '\n' || c == '\r' || c == '\0') return false;
-  }
-  return true;
+bool aoaClientAuthenticated(){
+  if(!aoaActive||!aoaAccessLevel||aoaAuthenticatedIP==IPAddress(0,0,0,0))return false;
+  if((int32_t)(millis()-aoaSessionUntil)>=0){aoaAuthenticatedIP=IPAddress(0,0,0,0);aoaAccessLevel=0;return false;}
+  return aoaServer.client().remoteIP()==aoaAuthenticatedIP;
 }
-
-void handleAOARoot() {
-  lastActivity = millis();
-  if (aoaClientAuthenticated()) {
-    String body = F("<p class='ok'>PIN verified. Add a new credential below.</p><form method='POST' action='/add'>");
-    body += F("<label>Website / service</label><input name='site' maxlength='40' required autocomplete='off' placeholder='example.com'>");
-    body += F("<label>Username</label><input name='user' maxlength='40' required autocomplete='off'>");
-    body += F("<label>Password</label><input name='pass' type='password' maxlength='64' required autocomplete='new-password'>");
-    body += F("<button type='submit'>Save new credential</button></form><p class='note'>Existing entries are never sent to this browser. The web interface does not provide account viewing or deletion.</p>");
-    aoaServer.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    aoaServer.send(200, "text/html", aoaPage(body));
-    return;
-  }
-  String body = F("<form method='POST' action='/login'><label>Master PIN</label><input name='pin' type='password' inputmode='numeric' maxlength='12' required autocomplete='off'><button type='submit'>Unlock add-only access</button></form><p class='note'>Only adding new credentials is allowed. Saved credentials cannot be viewed or deleted here.</p>");
-  aoaServer.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-  aoaServer.send(200, "text/html", aoaPage(body));
+bool aoaIsAdmin(){return aoaClientAuthenticated()&&aoaAccessLevel==2;}
+int aoaAccountIndex(){
+  if(!aoaServer.hasArg("id"))return -1;String v=aoaServer.arg("id");if(!v.length()||v.length()>3)return -1;
+  for(size_t i=0;i<v.length();i++)if(v[i]<'0'||v[i]>'9')return -1;
+  int n=v.toInt();return(n>=0&&n<vaultAccountCount&&n<MAX_ACCOUNTS)?n:-1;
 }
-
-void handleAOALogin() {
-  lastActivity = millis();
-  if (!aoaActive) { aoaServer.send(503, "text/plain", "AOA is disabled"); return; }
-  if ((int32_t)(millis() - aoaPinLockoutUntil) < 0) {
-    aoaServer.send(429, "text/html", aoaPage(F("<p class='err'>Too many incorrect PIN attempts. Wait 30 seconds, then try again.</p><p><a href='/' style='color:#46dcf0'>Back</a></p>")));
-    return;
-  }
-  String pin = aoaServer.arg("pin");
-  if (pin.length() > 0 && verifyVaultPIN(pin)) {
-    pin = "";
-    aoaBadPinAttempts = 0;
-    aoaAuthenticatedIP = aoaServer.client().remoteIP();
-    aoaSessionUntil = millis() + AOA_SESSION_MS;
-    aoaServer.sendHeader("Cache-Control", "no-store");
-    aoaServer.sendHeader("Location", "/", true);
-    aoaServer.send(303, "text/plain", "PIN accepted. Return to the add-entry page.");
-    return;
-  }
-  pin = "";
-  aoaBadPinAttempts++;
-  if (aoaBadPinAttempts >= 5) {
-    aoaBadPinAttempts = 0;
-    aoaPinLockoutUntil = millis() + AOA_LOCKOUT_MS;
-  }
-  aoaServer.send(401, "text/html", aoaPage(F("<p class='err'>Incorrect PIN.</p><p><a href='/' style='color:#46dcf0'>Try again</a></p>")));
+bool validAOAField(const String &v,size_t m){
+  if(!v.length()||v.length()>m)return false;for(size_t i=0;i<v.length();i++)if(v[i]=='|'||v[i]=='\n'||v[i]=='\r'||v[i]=='\0')return false;return true;
 }
-
-void handleAOAAdd() {
-  lastActivity = millis();
-  if (!aoaClientAuthenticated()) {
-    aoaServer.send(401, "text/html", aoaPage(F("<p class='err'>PIN session expired. Please sign in again.</p><p><a href='/'>Sign in</a></p>")));
-    return;
+void handleAOARoot(){
+  lastActivity=millis();String b;
+  if(aoaClientAuthenticated()){
+    b=aoaAccessLevel==2?F("<p class='ok'>Master PIN verified — administrator access.</p>"):F("<p class='ok'>Temporary PIN verified — add-only access.</p>");
+    b+=F("<form method='POST' action='/add'><label>Website / service</label><input name='site' maxlength='40' required><label>Username</label><input name='user' maxlength='40' required><label>Password</label><input name='pass' type='password' maxlength='64' required><button class='wide'>Save new credential</button></form>");
+    if(aoaAccessLevel==2)b+=F("<a class='btn wide' href='/manage'>Manage saved credentials</a><p class='note'>Master PIN allows viewing, adding, editing and deleting credentials.</p>");
+    else b+=F("<p class='note'>Temporary PIN allows adding only. Existing credentials cannot be viewed, modified or deleted.</p>");
+  }else{
+    b=F("<p class='note'>Use the temporary PIN shown on the device for add-only access, or the device master PIN for full management.</p><form method='POST' action='/login'><label>Access PIN</label><input name='pin' type='password' inputmode='numeric' maxlength='12' required><button class='wide'>Sign in</button></form><p class='note'>Temporary PIN: add only. Master PIN: full access.</p>");
   }
-  String site = aoaServer.arg("site");
-  String user = aoaServer.arg("user");
-  String pass = aoaServer.arg("pass");
-  if (!validAOAField(site, 40) || !validAOAField(user, 40) || !validAOAField(pass, 64)) {
-    site = ""; user = ""; pass = "";
-    aoaServer.send(400, "text/html", aoaPage(F("<p class='err'>Invalid or too-long field. No entry was saved.</p><p><a href='/'>Back to form</a></p>")));
-    return;
-  }
-  if (!vaultStorageReady) {
-    site = ""; user = ""; pass = "";
-    aoaServer.send(503, "text/html", aoaPage(F("<p class='err'>Encrypted storage is unavailable. Nothing was saved.</p>")));
-    return;
-  }
-  bool loaded = loadVaultAccounts();
-  if (!loaded && (vaultFileInvalid || SD_MMC.exists(VAULT_FILE))) {
-    site = ""; user = ""; pass = "";
-    aoaServer.send(500, "text/html", aoaPage(F("<p class='err'>Vault file could not be validated. Existing data was preserved; nothing was saved.</p>")));
-    return;
-  }
-  if (!SD_MMC.exists(VAULT_FILE)) vaultAccountCount = 0;
-  if (vaultAccountCount >= MAX_ACCOUNTS) {
-    site = ""; user = ""; pass = "";
-    aoaServer.send(409, "text/html", aoaPage(F("<p class='err'>Account capacity reached. No entry was saved.</p><p>Use the device touchscreen to manage existing entries.</p>")));
-    return;
-  }
-  vaultAccounts[vaultAccountCount].site = site;
-  vaultAccounts[vaultAccountCount].user = user;
-  vaultAccounts[vaultAccountCount].password = pass;
-  vaultAccountCount++;
-  bool saved = saveAllAccounts();
-  site = ""; user = ""; pass = "";
-  if (!saved) {
-    if (vaultAccountCount) vaultAccountCount--;
-    vaultAccounts[vaultAccountCount].site = "";
-    vaultAccounts[vaultAccountCount].user = "";
-    vaultAccounts[vaultAccountCount].password = "";
-    aoaServer.send(500, "text/html", aoaPage(F("<p class='err'>Save failed. The previous vault was retained.</p><p><a href='/'>Return</a></p>")));
-    return;
-  }
-  aoaSessionUntil = millis() + AOA_SESSION_MS;
-  aoaServer.sendHeader("Cache-Control", "no-store");
-  aoaServer.send(200, "text/html", aoaPage(F("<p class='ok'>New credential saved and encrypted.</p><p>No existing account details were accessed or displayed.</p><p><a href='/' style='color:#46dcf0'>Add another entry</a></p>")));
+  aoaServer.sendHeader("Cache-Control","no-store, no-cache, must-revalidate");aoaServer.send(200,"text/html",aoaPage(b,"Vault sign in"));
 }
-
-void handleAOAPing() {
-  if (aoaClientAuthenticated()) {
-    // Heartbeat keeps the physical vault from auto-locking during active entry,
-    // but does not extend the web PIN session indefinitely.
-    lastActivity = millis();
-    aoaServer.sendHeader("Cache-Control", "no-store");
-    aoaServer.send(204, "text/plain", "");
-  } else {
-    aoaServer.send(401, "text/plain", "Session expired");
-  }
+void handleAOALogin(){
+  lastActivity=millis();if(!aoaActive){aoaServer.send(503,"text/plain","AOA disabled");return;}
+  if((int32_t)(millis()-aoaPinLockoutUntil)<0){aoaServer.send(429,"text/html",aoaPage(F("<p class='err'>Too many attempts. Wait 30 seconds.</p><a class='btn' href='/'>Back</a>")));return;}
+  String p=aoaServer.arg("pin");uint8_t level=0;
+  if(p.length()&&verifyVaultPIN(p))level=2;else if(p.length()==6&&p==aoaTemporaryPIN)level=1;p="";
+  if(level){aoaBadPinAttempts=0;aoaAuthenticatedIP=aoaServer.client().remoteIP();aoaAccessLevel=level;aoaSessionUntil=millis()+AOA_SESSION_MS;aoaServer.sendHeader("Cache-Control","no-store");aoaServer.sendHeader("Location","/",true);aoaServer.send(303,"text/plain","PIN accepted.");return;}
+  if(++aoaBadPinAttempts>=5){aoaBadPinAttempts=0;aoaPinLockoutUntil=millis()+AOA_LOCKOUT_MS;}
+  aoaServer.send(401,"text/html",aoaPage(F("<p class='err'>Incorrect PIN.</p><a class='btn' href='/'>Try again</a>")));
 }
-
-void handleAOANotFound() {
-  // Deliberately no API route exists to read, enumerate, edit, or delete saved accounts.
-  aoaServer.send(404, "text/plain", "Not found. AOA supports adding new entries only.");
+void handleAOAAdd(){
+  lastActivity=millis();if(!aoaClientAuthenticated()){aoaServer.send(401,"text/html",aoaPage(F("<p class='err'>Session expired.</p><a href='/'>Sign in</a>")));return;}
+  String site=aoaServer.arg("site"),user=aoaServer.arg("user"),pass=aoaServer.arg("pass");
+  if(!validAOAField(site,40)||!validAOAField(user,40)||!validAOAField(pass,64)){site="";user="";pass="";aoaServer.send(400,"text/html",aoaPage(F("<p class='err'>Invalid fields. Nothing saved.</p><a href='/'>Back</a>")));return;}
+  bool loaded=loadVaultAccounts();if(!loaded&&(vaultFileInvalid||SD_MMC.exists(VAULT_FILE))){site="";user="";pass="";aoaServer.send(500,"text/html",aoaPage(F("<p class='err'>Vault validation failed. No changes made.</p>")));return;}
+  if(!SD_MMC.exists(VAULT_FILE))vaultAccountCount=0;
+  if(!vaultStorageReady||vaultAccountCount>=MAX_ACCOUNTS){site="";user="";pass="";aoaServer.send(409,"text/html",aoaPage(F("<p class='err'>Storage unavailable or capacity reached.</p>")));return;}
+  vaultAccounts[vaultAccountCount].site=site;vaultAccounts[vaultAccountCount].user=user;vaultAccounts[vaultAccountCount].password=pass;vaultAccountCount++;
+  bool ok=saveAllAccounts();site="";user="";pass="";
+  if(!ok){if(vaultAccountCount) vaultAccountCount--;vaultAccounts[vaultAccountCount].site="";vaultAccounts[vaultAccountCount].user="";vaultAccounts[vaultAccountCount].password="";aoaServer.send(500,"text/html",aoaPage(F("<p class='err'>Save failed. Previous vault retained.</p>")));return;}
+  aoaSessionUntil=millis()+AOA_SESSION_MS;aoaServer.sendHeader("Cache-Control","no-store");aoaServer.send(200,"text/html",aoaPage(F("<p class='ok'>Credential saved and encrypted.</p><a class='btn' href='/'>Add another</a>")));
 }
-
-void startAOA() {
-  // Generate a fresh password for every AOA hotspot session.
-  generateAOAPassword();
-
-  WiFi.mode(WIFI_AP);
-  if (aoaActive) {
-    setStatus("AOA hotspot already active", 1800);
-    drawHomeScreen();
-    return;
+void handleAOAManage(){
+  lastActivity=millis();if(!aoaIsAdmin()){aoaServer.send(403,"text/plain","Master PIN required");return;}
+  bool ok=loadVaultAccounts();if(!ok&&(vaultFileInvalid||SD_MMC.exists(VAULT_FILE))){aoaServer.send(500,"text/html",aoaPage(F("<p class='err'>Vault validation failed.</p>")));return;}if(!SD_MMC.exists(VAULT_FILE))vaultAccountCount=0;
+  String b=F("<p class='ok'>Master access — credentials are shown below.</p>");b+=F("<p class='note'>");b+=String(vaultAccountCount);b+=F(" stored credential(s).</p>");
+  int page=aoaServer.hasArg("page")?max(0,aoaServer.arg("page").toInt()):0;const int per=12;int pages=max(1,((int)vaultAccountCount+per-1)/per);if(page>=pages)page=pages-1;
+  for(int i=page*per;i<min((int)vaultAccountCount,(page+1)*per);i++){
+    b+=F("<div class='item'><b>");b+=String(i+1);b+=F(". ");b+=aoaHtmlEscape(vaultAccounts[i].site);b+=F("</b><br><span class='note'>");b+=aoaHtmlEscape(vaultAccounts[i].user);b+=F("</span><div class='actions'><a class='btn' href='/view?id=");b+=String(i);b+=F("'>View</a><a class='btn secondary' href='/edit?id=");b+=String(i);b+=F("'>Edit</a><form method='POST' action='/delete'><input type='hidden' name='id' value='");b+=String(i);b+=F("'><button class='danger wide' onclick=\"return confirm('Delete permanently?')\">Delete</button></form></div></div>");
   }
-  if (!vaultStorageReady) {
-    setStatus("Vault storage unavailable", 2200);
-    drawHomeScreen();
-    return;
-  }
-  bool loaded = loadVaultAccounts();
-  if (!loaded && (vaultFileInvalid || SD_MMC.exists(VAULT_FILE))) {
-    setStatus("Vault storage unavailable", 2200);
-    drawHomeScreen();
-    return;
-  }
-  if (!SD_MMC.exists(VAULT_FILE)) vaultAccountCount = 0;
-  WiFi.mode(WIFI_AP);
-  WiFi.setSleep(false);
-  if (!WiFi.softAP(AOA_SSID, AOA_AP_PASSWORD, 6, false, 2)) {
-    WiFi.mode(WIFI_OFF);
-    setStatus("AOA hotspot failed", 2200);
-    Serial.println("AOA: failed to start Wi-Fi access point.");
-    drawHomeScreen();
-    return;
-  }
-  aoaAuthenticatedIP = IPAddress(0, 0, 0, 0);
-  aoaSessionUntil = 0;
-  aoaBadPinAttempts = 0;
-  aoaPinLockoutUntil = 0;
-  aoaServer.begin();
-  aoaActive = true;
-  lastActivity = millis();
-  Serial.println("AOA hotspot started. Add-only web interface enabled.");
-  Serial.printf("AOA SSID: %s\n", AOA_SSID);
-  Serial.printf("AOA password: %s\n", AOA_AP_PASSWORD);
-  Serial.printf("AOA URL: http://%s/\n", WiFi.softAPIP().toString().c_str());
-  // Show the Wi-Fi QR immediately so the phone can join without typing the passphrase.
-  currentScreen = AOA_QR_SCREEN;
-  drawAOAQRScreen();
-  setStatus("Scan QR to join AOA Wi-Fi", 3500);
+  if(page>0){b+=F("<a class='btn secondary' href='/manage?page=");b+=String(page-1);b+=F("'>Previous</a>");}
+  if(page+1<pages){b+=F("<a class='btn secondary' href='/manage?page=");b+=String(page+1);b+=F("'>Next</a>");}
+  b+=F("<a class='btn wide' href='/'>Back to add page</a>");aoaServer.sendHeader("Cache-Control","no-store, no-cache, must-revalidate");aoaServer.send(200,"text/html",aoaPage(b,"Manage credentials"));
 }
-
-void stopAOA() {
-  if (!aoaActive) return;
-  aoaServer.stop();
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_OFF);
-  aoaActive = false;
-  aoaAuthenticatedIP = IPAddress(0, 0, 0, 0);
-  aoaSessionUntil = 0;
-  aoaBadPinAttempts = 0;
-  aoaPinLockoutUntil = 0;
-  Serial.println("AOA hotspot stopped; web session cleared.");
+void handleAOAView(){
+  if(!aoaIsAdmin()){aoaServer.send(403,"text/plain","Master PIN required");return;}if(!loadVaultAccounts()&&(vaultFileInvalid||SD_MMC.exists(VAULT_FILE))){aoaServer.send(500,"text/plain","Vault invalid");return;}
+  int i=aoaAccountIndex();if(i<0){aoaServer.send(404,"text/plain","Not found");return;}const VaultAccount&a=vaultAccounts[i];String b=F("<div class='item'><b>Website</b><p>");b+=aoaHtmlEscape(a.site);b+=F("</p><b>Username</b><p>");b+=aoaHtmlEscape(a.user);b+=F("</p><b>Password</b><p>");b+=aoaHtmlEscape(a.password);b+=F("</p></div><a class='btn' href='/edit?id=");b+=String(i);b+=F("'>Edit</a><a class='btn secondary' href='/manage'>Back</a>");aoaServer.sendHeader("Cache-Control","no-store");aoaServer.send(200,"text/html",aoaPage(b,"View credential"));
 }
-
-void serviceAOA() {
-  if (aoaActive) aoaServer.handleClient();
+void handleAOAEdit(){
+  if(!aoaIsAdmin()){aoaServer.send(403,"text/plain","Master PIN required");return;}if(!loadVaultAccounts()&&(vaultFileInvalid||SD_MMC.exists(VAULT_FILE))){aoaServer.send(500,"text/plain","Vault invalid");return;}
+  int i=aoaAccountIndex();if(i<0){aoaServer.send(404,"text/plain","Not found");return;}const VaultAccount&a=vaultAccounts[i];String b=F("<form method='POST' action='/update'><input type='hidden' name='id' value='");b+=String(i);b+=F("'><label>Website</label><input name='site' maxlength='40' required value='");b+=aoaHtmlEscape(a.site);b+=F("'><label>Username</label><input name='user' maxlength='40' required value='");b+=aoaHtmlEscape(a.user);b+=F("'><label>Password</label><input name='pass' maxlength='64' required value='");b+=aoaHtmlEscape(a.password);b+=F("'><button class='wide'>Save changes</button></form><a class='btn secondary wide' href='/manage'>Cancel</a>");aoaServer.sendHeader("Cache-Control","no-store, no-cache, must-revalidate");aoaServer.send(200,"text/html",aoaPage(b,"Edit credential"));
 }
+void handleAOAUpdate(){
+  if(!aoaIsAdmin()){aoaServer.send(403,"text/plain","Master PIN required");return;}if(!loadVaultAccounts()&&(vaultFileInvalid||SD_MMC.exists(VAULT_FILE))){aoaServer.send(500,"text/plain","Vault invalid");return;}
+  int i=aoaAccountIndex();String site=aoaServer.arg("site"),user=aoaServer.arg("user"),pass=aoaServer.arg("pass");if(i<0||!validAOAField(site,40)||!validAOAField(user,40)||!validAOAField(pass,64)){site="";user="";pass="";aoaServer.send(400,"text/plain","Invalid form");return;}
+  VaultAccount old=vaultAccounts[i];vaultAccounts[i].site=site;vaultAccounts[i].user=user;vaultAccounts[i].password=pass;site="";user="";pass="";
+  if(!saveAllAccounts()){vaultAccounts[i]=old;old.site="";old.user="";old.password="";aoaServer.send(500,"text/html",aoaPage(F("<p class='err'>Save failed; original retained.</p><a href='/manage'>Back</a>")));return;}
+  old.site="";old.user="";old.password="";aoaSessionUntil=millis()+AOA_SESSION_MS;aoaServer.sendHeader("Cache-Control","no-store");aoaServer.send(200,"text/html",aoaPage(F("<p class='ok'>Credential updated.</p><a class='btn' href='/manage'>Back to credentials</a>")));
+}
+void handleAOADelete(){
+  if(!aoaIsAdmin()){aoaServer.send(403,"text/plain","Master PIN required");return;}if(!loadVaultAccounts()&&(vaultFileInvalid||SD_MMC.exists(VAULT_FILE))){aoaServer.send(500,"text/plain","Vault invalid");return;}
+  int i=aoaAccountIndex();if(i<0){aoaServer.send(404,"text/plain","Not found");return;}VaultAccount old=vaultAccounts[i];
+  for(int n=i;n<(int)vaultAccountCount-1;n++)vaultAccounts[n]=vaultAccounts[n+1];vaultAccountCount--;vaultAccounts[vaultAccountCount].site="";vaultAccounts[vaultAccountCount].user="";vaultAccounts[vaultAccountCount].password="";
+  if(!saveAllAccounts()){for(int n=vaultAccountCount;n>i;n--)vaultAccounts[n]=vaultAccounts[n-1];vaultAccounts[i]=old;vaultAccountCount++;old.site="";old.user="";old.password="";aoaServer.send(500,"text/html",aoaPage(F("<p class='err'>Delete failed; original retained.</p><a href='/manage'>Back</a>")));return;}
+  old.site="";old.user="";old.password="";aoaSessionUntil=millis()+AOA_SESSION_MS;aoaServer.sendHeader("Cache-Control","no-store");aoaServer.send(200,"text/html",aoaPage(F("<p class='ok'>Credential deleted.</p><a class='btn' href='/manage'>Back to credentials</a>")));
+}
+void handleAOAPing(){if(aoaClientAuthenticated()){lastActivity=millis();aoaServer.sendHeader("Cache-Control","no-store");aoaServer.send(204,"text/plain","");}else aoaServer.send(401,"text/plain","Session expired");}
+void handleAOANotFound(){aoaServer.send(404,"text/plain","Not found");}
+void startAOA(){
+  if(aoaActive){currentScreen=AOA_QR_SCREEN;drawAOAQRScreen();setStatus("AOA hotspot already active",1800);return;}
+  if(!vaultStorageReady){setStatus("Vault storage unavailable",2200);drawHomeScreen();return;}
+  bool loaded=loadVaultAccounts();if(!loaded&&(vaultFileInvalid||SD_MMC.exists(VAULT_FILE))){setStatus("Vault storage unavailable",2200);drawHomeScreen();return;}
+  generateAOAPassword();char digits[7];snprintf(digits,sizeof(digits),"%06lu",(unsigned long)(esp_random()%1000000UL));aoaTemporaryPIN=String(digits);memset(digits,0,sizeof(digits));
+  WiFi.mode(WIFI_AP);WiFi.setSleep(false);
+  if(!WiFi.softAP(AOA_SSID,AOA_AP_PASSWORD,6,false,2)){aoaTemporaryPIN="";memset(AOA_AP_PASSWORD,0,sizeof(AOA_AP_PASSWORD));WiFi.mode(WIFI_OFF);setStatus("AOA hotspot failed",2200);drawHomeScreen();return;}
+  aoaAuthenticatedIP=IPAddress(0,0,0,0);aoaAccessLevel=0;aoaSessionUntil=0;aoaBadPinAttempts=0;aoaPinLockoutUntil=0;aoaServer.begin();aoaActive=true;lastActivity=millis();
+  Serial.println("AOA started. Temporary PIN is displayed on the device, not logged to Serial.");Serial.printf("AOA SSID: %s\n",AOA_SSID);Serial.printf("AOA password: %s\n",AOA_AP_PASSWORD);Serial.printf("AOA URL: http://%s/\n",WiFi.softAPIP().toString().c_str());
+  currentScreen=AOA_QR_SCREEN;drawAOAQRScreen();setStatus("Scan QR to join AOA Wi-Fi",3500);
+}
+void stopAOA(){
+  if(!aoaActive)return;aoaServer.stop();WiFi.softAPdisconnect(true);WiFi.mode(WIFI_OFF);aoaActive=false;aoaAuthenticatedIP=IPAddress(0,0,0,0);aoaAccessLevel=0;aoaSessionUntil=0;aoaBadPinAttempts=0;aoaPinLockoutUntil=0;aoaTemporaryPIN="";memset(AOA_AP_PASSWORD,0,sizeof(AOA_AP_PASSWORD));Serial.println("AOA stopped; temporary PIN and sessions cleared.");
+}
+void serviceAOA(){if(aoaActive)aoaServer.handleClient();}
 
 // =================================================
 // AOA WI-FI QR SCREEN
@@ -1608,11 +1526,11 @@ void drawAOAQRScreen() {
     }
   }
 
-  //lcd.setTextColor(CYAN, BG);
+  lcd.setTextColor(CYAN, BG);
   lcd.setTextSize(1);
-  //lcd.drawString("ES3C28P-AOA", 120, 236);
+  lcd.drawString("TEMP PIN: " + aoaTemporaryPIN, 120, 246);
   lcd.setTextColor(MUTED, BG);
-  lcd.drawString("Open http://192.168.4.1", 120, 252);
+  lcd.drawString("Open http://192.168.4.1", 120, 262);
   drawButton(12, 274, 102, 36, "BACK", PANEL);
   drawButton(126, 274, 102, 36, "STOP AOA", lcd.color565(120, 35, 40));
 }
@@ -2748,10 +2666,15 @@ void setup() {
   lcd.setColorDepth(16);
   lcd.setBrightness(255);
 
-  // Register AOA routes once; the handlers expose add-only functionality.
+  // Credential-management routes are protected by master-PIN authorization.
   aoaServer.on("/", HTTP_GET, handleAOARoot);
   aoaServer.on("/login", HTTP_POST, handleAOALogin);
   aoaServer.on("/add", HTTP_POST, handleAOAAdd);
+  aoaServer.on("/manage", HTTP_GET, handleAOAManage);
+  aoaServer.on("/view", HTTP_GET, handleAOAView);
+  aoaServer.on("/edit", HTTP_GET, handleAOAEdit);
+  aoaServer.on("/update", HTTP_POST, handleAOAUpdate);
+  aoaServer.on("/delete", HTTP_POST, handleAOADelete);
   aoaServer.on("/ping", HTTP_GET, handleAOAPing);
   aoaServer.onNotFound(handleAOANotFound);
 
