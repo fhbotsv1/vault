@@ -268,6 +268,9 @@ const uint32_t AOA_LOCKOUT_MS = 30UL * 1000UL;
 // ----- State -----
 
 String enteredPIN = "";
+uint8_t pinChangeStep = 0;
+String pinOldInput = "", pinNewInput = "", pinConfirmInput = "";
+String settingsMessage = "";
 String statusMessage = "";
 
 uint32_t statusUntil = 0;
