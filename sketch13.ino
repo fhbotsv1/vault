@@ -159,7 +159,7 @@ String accountSite = "";
 String accountUser = "";
 String accountPassword = "";
 
-const uint32_t AUTO_LOCK_MS = 60000;
+const uint32_t AUTO_LOCK_MS = 180000;
 const uint32_t FP_POLL_MS = 100;
 const uint8_t MAX_FP_FAILURES = 3;
 
