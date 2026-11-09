@@ -10,6 +10,8 @@
 #include <mbedtls/gcm.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <sys/time.h>
+#include <time.h>
 #include <HijelHID_BLEKeyboard.h>
 #include <qrcode.h>  
 
@@ -268,6 +270,10 @@ uint8_t aoaAccessLevel = 0; // 1 temporary add-only, 2 master administrator
 String aoaTemporaryPIN = "";
 const uint32_t AOA_SESSION_MS = 5UL * 60UL * 1000UL;
 const uint32_t AOA_LOCKOUT_MS = 30UL * 1000UL;
+
+// Clock is set by a master-authenticated phone through the AOA hotspot.
+bool deviceClockIsSet = false;
+uint32_t lastHeaderClockRefresh = 0;
 
 // ----- State -----
 
@@ -994,49 +1000,33 @@ void drawButton(
 }
 
 void drawBatteryIndicator() {
-  // Clear only the battery display area
-  lcd.fillRect(174, 3, 64, 34, PANEL);
-
-  // Battery icon dimensions
-  const int x = 178;
-  const int y = 12;
-  const int w = 23;
-  const int h = 13;
-
-  uint16_t batteryColour = GREEN;
-
-  if (batteryPercentage <= 20) {
-    batteryColour = RED;
-  } else if (batteryPercentage <= 40) {
-    batteryColour = lcd.color565(255, 180, 50);
-  }
-
-  // Battery outline
-  lcd.drawRoundRect(x, y, w, h, 2, WHITE);
-
-  // Battery positive terminal
-  lcd.fillRect(x + w, y + 4, 3, 5, WHITE);
-
-  // Battery level
-  int levelWidth = (w - 4) * batteryPercentage / 100;
-
-  if (levelWidth > 0) {
-    lcd.fillRect(
-      x + 2,
-      y + 2,
-      levelWidth,
-      h - 4,
-      batteryColour
-    );
-  }
-
-  // Percentage text
-  lcd.setTextDatum(middle_left);
-  lcd.setTextColor(WHITE, PANEL);
+  // Percentage only; remove the battery graphic to make room for the clock.
+  lcd.fillRect(204, 3, 34, 34, PANEL);
+  lcd.setTextDatum(middle_right);
+  lcd.setTextColor(batteryPercentage <= 20 ? RED : WHITE, PANEL);
   lcd.setTextSize(1);
+  lcd.drawString(String(batteryPercentage) + "%", 234, 20);
+}
 
-  String percentageText = String(batteryPercentage) + "%";
-  lcd.drawString(percentageText, 207, 19);
+void drawHeaderClock() {
+  lcd.fillRect(158, 3, 43, 34, PANEL);
+  lcd.setTextDatum(middle_center);
+  lcd.setTextColor(deviceClockIsSet ? GREEN : MUTED, PANEL);
+  lcd.setTextSize(1);
+  if (!deviceClockIsSet) {
+    lcd.drawString("--:--", 179, 20);
+    return;
+  }
+  time_t now = time(nullptr);
+  struct tm localTimeInfo;
+  if (now < 1704067200 || !localtime_r(&now, &localTimeInfo)) {
+    deviceClockIsSet = false;
+    lcd.drawString("--:--", 179, 20);
+    return;
+  }
+  char clockText[6];
+  strftime(clockText, sizeof(clockText), "%H:%M", &localTimeInfo);
+  lcd.drawString(clockText, 179, 20);
 }
 
 /*void drawHeader(const char *title) {
@@ -1060,7 +1050,8 @@ void drawHeader(const char *title) {
   lcd.setTextSize(1);
   lcd.drawString(title, 10, 20);
 
-  // Battery indicator on the right
+  // Clock and battery percentage share the right side of the header.
+  drawHeaderClock();
   drawBatteryIndicator();
 
   lcd.drawFastHLine(12, 41, 216, BORDER);
@@ -1410,7 +1401,7 @@ void handleAOARoot(){
   if(aoaClientAuthenticated()){
     b=aoaAccessLevel==2?F("<p class='ok'>Master PIN verified — administrator access.</p>"):F("<p class='ok'>Temporary PIN verified — add-only access.</p>");
     b+=F("<form method='POST' action='/add'><label>Website / service</label><input name='site' maxlength='40' required><label>Username</label><input name='user' maxlength='40' required><label>Password</label><input name='pass' type='password' maxlength='64' required><button class='wide'>Save new credential</button></form>");
-    if(aoaAccessLevel==2)b+=F("<a class='btn wide' href='/manage'>Manage saved credentials</a><p class='note'>Master PIN allows viewing, adding, editing and deleting credentials.</p>");
+    if(aoaAccessLevel==2)b+=F("<a class='btn wide' href='/manage'>Manage saved credentials</a><a class='btn secondary wide' href='/clock'>Sync device clock</a><p class='note'>Master PIN allows viewing, adding, editing and deleting credentials.</p>");
     else b+=F("<p class='note'>Temporary PIN allows adding only. Existing credentials cannot be viewed, modified or deleted.</p>");
   }else{
     b=F("<p class='note'>Use the temporary PIN shown on the device for add-only access, or the device master PIN for full management.</p><form method='POST' action='/login'><label>Access PIN</label><input name='pin' type='password' inputmode='numeric' maxlength='12' required><button class='wide'>Sign in</button></form><p class='note'>Temporary PIN: add only. Master PIN: full access.</p>");
@@ -1473,6 +1464,42 @@ void handleAOADelete(){
   old.site="";old.user="";old.password="";aoaSessionUntil=millis()+AOA_SESSION_MS;aoaServer.sendHeader("Cache-Control","no-store");aoaServer.send(200,"text/html",aoaPage(F("<p class='ok'>Credential deleted.</p><a class='btn' href='/manage'>Back to credentials</a>")));
 }
 void handleAOAPing(){if(aoaClientAuthenticated()){lastActivity=millis();aoaServer.sendHeader("Cache-Control","no-store");aoaServer.send(204,"text/plain","");}else aoaServer.send(401,"text/plain","Session expired");}
+void handleAOAClockPage() {
+  lastActivity = millis();
+  if (!aoaIsAdmin()) { aoaServer.send(403, "text/plain", "Master PIN required"); return; }
+  String b = F("<p class='note'>Set the vault clock from this phone. The date and time are taken from your phone and can be adjusted before syncing.</p><label>Phone date and time</label><input id='phoneTime' type='datetime-local' step='1'><button class='wide' type='button' onclick='syncClock()'>Sync clock to device</button><p id='result' class='note'>Device time zone: India Standard Time (IST).</p><a class='btn secondary wide' href='/'>Back</a><script>const el=document.getElementById('phoneTime');const d=new Date();const pad=n=>String(n).padStart(2,'0');el.value=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());async function syncClock(){const ms=Date.parse(el.value);const out=document.getElementById('result');if(!Number.isFinite(ms)){out.textContent='Please enter a valid date and time.';return;}out.textContent='Synchronizing...';try{const r=await fetch('/sync-clock',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'epoch='+Math.floor(ms/1000),cache:'no-store'});out.textContent=await r.text();}catch(e){out.textContent='Could not contact the vault. Check the hotspot connection.';}}</script>");
+  aoaServer.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  aoaServer.send(200, "text/html", aoaPage(b, "Sync device clock"));
+}
+
+void handleAOASyncClock() {
+  lastActivity = millis();
+  if (!aoaIsAdmin()) { aoaServer.send(403, "text/plain", "Master PIN required"); return; }
+  if (!aoaServer.hasArg("epoch")) { aoaServer.send(400, "text/plain", "Missing phone time"); return; }
+  String raw = aoaServer.arg("epoch");
+  if (raw.length() != 10) { aoaServer.send(400, "text/plain", "Invalid timestamp"); return; }
+  for (size_t i = 0; i < raw.length(); ++i) {
+    if (raw[i] < '0' || raw[i] > '9') { aoaServer.send(400, "text/plain", "Invalid timestamp"); return; }
+  }
+  long long epoch = strtoll(raw.c_str(), nullptr, 10);
+  if (epoch < 1704067200LL || epoch > 4102444799LL) {
+    aoaServer.send(400, "text/plain", "Date is outside the supported range");
+    return;
+  }
+  struct timeval tv;
+  tv.tv_sec = (time_t)epoch;
+  tv.tv_usec = 0;
+  if (settimeofday(&tv, nullptr) != 0) {
+    aoaServer.send(500, "text/plain", "Clock update failed");
+    return;
+  }
+  deviceClockIsSet = true;
+  lastHeaderClockRefresh = 0;
+  aoaSessionUntil = millis() + AOA_SESSION_MS;
+  aoaServer.sendHeader("Cache-Control", "no-store");
+  aoaServer.send(200, "text/plain", "Clock synchronized successfully. Device time is now set to IST.");
+}
+
 void handleAOANotFound(){aoaServer.send(404,"text/plain","Not found");}
 void startAOA(){
   if(aoaActive){currentScreen=AOA_QR_SCREEN;drawAOAQRScreen();setStatus("AOA hotspot already active",1800);return;}
@@ -2629,6 +2656,11 @@ void setup() {
     Serial.println("PIN fallback will remain available.");
   }
 
+  // Use India Standard Time for the device clock display.
+  setenv("TZ", "IST-5:30", 1);
+  tzset();
+  deviceClockIsSet = false;
+
   // Display colours
   BG = lcd.color565(15, 22, 35);
   PANEL = lcd.color565(35, 48, 66);
@@ -2668,6 +2700,8 @@ void setup() {
   aoaServer.on("/update", HTTP_POST, handleAOAUpdate);
   aoaServer.on("/delete", HTTP_POST, handleAOADelete);
   aoaServer.on("/ping", HTTP_GET, handleAOAPing);
+  aoaServer.on("/clock", HTTP_GET, handleAOAClockPage);
+  aoaServer.on("/sync-clock", HTTP_POST, handleAOASyncClock);
   aoaServer.onNotFound(handleAOANotFound);
 
   // Initialize encrypted microSD storage without formatting the card.
@@ -2710,6 +2744,11 @@ void loop() {
   }
 
   static unsigned long lastBatteryUpdate = 0;
+
+  if (millis() - lastHeaderClockRefresh >= 1000) {
+    lastHeaderClockRefresh = millis();
+    drawHeaderClock();
+  }
 
   if (millis() - lastBatteryUpdate >= 30000) {
   lastBatteryUpdate = millis();
